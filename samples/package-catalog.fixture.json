@@ -1,0 +1,30 @@
+{
+  "_comment": "Synthetic enterprise mirror for samples/synthetic-monorepo. System.Linq.Async is deliberately absent (public but not mirrored); Microsoft.Extensions.Hosting 10.0.3 is mirrored but not approved, so 10.0.0 is the version to use.",
+  "sources": ["synthetic-enterprise-mirror"],
+  "packages": {
+    "Microsoft.Extensions.Hosting": {
+      "availableVersions": ["8.0.0", "8.0.1", "10.0.0", "10.0.3"],
+      "approvedVersions": ["8.0.1", "10.0.0"],
+      "compatibility": {
+        "8.0.1": ["net8.0", "net10.0"],
+        "10.0.0": ["net8.0", "net10.0"],
+        "10.0.3": ["net8.0", "net10.0"]
+      }
+    },
+    "Microsoft.NET.Test.Sdk": {
+      "availableVersions": ["17.14.1"],
+      "approvedVersions": ["17.14.1"],
+      "compatibility": {"17.14.1": ["net8.0", "net10.0"]}
+    },
+    "xunit": {
+      "availableVersions": ["2.9.3"],
+      "approvedVersions": ["2.9.3"],
+      "compatibility": {"2.9.3": ["net8.0", "net10.0"]}
+    },
+    "xunit.runner.visualstudio": {
+      "availableVersions": ["3.1.4"],
+      "approvedVersions": ["3.1.4"],
+      "compatibility": {"3.1.4": ["net8.0", "net10.0"]}
+    }
+  }
+}

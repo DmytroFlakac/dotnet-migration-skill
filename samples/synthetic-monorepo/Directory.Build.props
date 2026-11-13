@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Company>Synthetic Monorepo Ltd</Company>
+  </PropertyGroup>
+</Project>

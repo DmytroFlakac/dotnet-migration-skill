@@ -1,0 +1,13 @@
+image: mcr.microsoft.com/dotnet/sdk:8.0
+
+stages: [build, test]
+
+build:
+  stage: build
+  script:
+    - dotnet build Monorepo.sln -c Release
+
+test:
+  stage: test
+  script:
+    - dotnet test Monorepo.sln -c Release

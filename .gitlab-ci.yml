@@ -1,0 +1,52 @@
+# CI for the migration skill itself (not for a repository being migrated).
+#   fast: unit, real-repository lessons and obsreport tests; Python only, every push
+#   full: the whole suite incl. the synthetic monorepo's analysis and full lifecycle; needs
+#         SDK 10 + runtimes 8 and 10 (and ASP.NET Core 8 for web test hosts); Linux
+#   package: builds both skill folders as artifacts
+stages: [test, package]
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHONPATH: "$CI_PROJECT_DIR/src"
+
+.python: &python
+  before_script:
+    - python -m pip install -r requirements.lock pytest
+
+fast-tests:
+  stage: test
+  image: python:3.11-slim
+  <<: *python
+  cache:
+    paths: [.cache/pip]
+  script:
+    - python -m pytest -q tests/test_units.py tests/test_real_repo_lessons.py tests/test_obsreport.py tests/test_limits.py
+
+full-tests:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  variables:
+    DMIG_DOTNET: /usr/share/dotnet/dotnet
+    DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv git curl > /dev/null
+    # .NET 8 runtimes next to SDK 10: the sample's net8.0 tests run during the transition
+    - curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+    - bash /tmp/dotnet-install.sh --runtime dotnet --channel 8.0 --install-dir /usr/share/dotnet
+    - bash /tmp/dotnet-install.sh --runtime aspnetcore --channel 8.0 --install-dir /usr/share/dotnet
+    - dotnet --list-sdks && dotnet --list-runtimes
+    - python3 -m venv /tmp/venv && . /tmp/venv/bin/activate && pip install -q -r requirements.lock pytest
+    - git config --global user.email ci@example.invalid && git config --global user.name ci
+  script:
+    - . /tmp/venv/bin/activate && python -m pytest -q tests
+  timeout: 45 minutes
+
+package:
+  stage: package
+  image: python:3.11-slim
+  script:
+    - python scripts/package_skill.py
+  artifacts:
+    paths:
+      - dist/*.zip
+    expire_in: 30 days

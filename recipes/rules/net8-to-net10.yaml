@@ -1,0 +1,258 @@
+# Breaking-change detection rules for net8.0 -> net10.0 (covers the .NET 9 and .NET 10 steps).
+# Written in our own words from public Microsoft breaking-change documentation; the MIT
+# dotnet/skills references were used as a checklist. Each rule says how it is detected,
+# what fails, and the narrow repair the implementation mode may apply.
+#
+# kind: package  -> matched against PackageReference id/version
+#       source   -> regex over source files (glob)
+#       file     -> regex over specific repository files (CI, Dockerfiles, global.json)
+rules:
+  - id: PKG-LINQ-ASYNC
+    kind: package
+    title: "System.Linq.Async clashes with the built-in AsyncEnumerable"
+    package: "System.Linq.Async"
+    version_below: "7.0.0"
+    introduced_in: "net10.0"
+    effect: "build_break"
+    expected_diagnostics: [CS0121]
+    failure_class: compile_time_api_break
+    detail: ".NET 10 ships LINQ for IAsyncEnumerable in the base library, so calls such as Where/ToListAsync become ambiguous."
+    repair:
+      id: linq-async-remove-on-net10
+      change_class: PROJECT_LOCAL
+      action: "Make the PackageReference conditional on net8.0 (or remove it once the project is net10.0-only). Version 7.x is the alternative when the code relies on operators the base library lacks."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/core-libraries/10.0/asyncenumerable"
+
+  - id: SRC-CS14-FIELD
+    kind: source
+    title: "C# 14 'field' keyword changes the meaning of a member named field"
+    glob: "**/*.cs"
+    pattern: '^\s*(?:(?:private|protected|internal|public|static|readonly|volatile)\s+)+[\w<>\[\]?,. ]+?\s+field\s*(?:[;=])'
+    introduced_in: "net10.0"
+    effect: "silent_behavior_change"
+    expected_diagnostics: [CS9258]
+    failure_class: test_regression
+    detail: "Inside a property accessor, `field` now means the compiler-generated backing field. Code compiles with only warning CS9258 and reads/writes a different storage location."
+    repair:
+      id: cs14-field-escape
+      change_class: PROJECT_LOCAL
+      action: "In accessors flagged by CS9258, replace `field` with `this.field` or `@field` (the compiler's own suggestion). Never rename the member."
+    reference: "https://learn.microsoft.com/dotnet/csharp/language-reference/keywords/field"
+
+  - id: SRC-CS14-SPAN-EXPRESSION
+    kind: source
+    title: "C# 14 span conversions can change which Contains is bound in expression trees"
+    glob: "**/*.cs"
+    pattern: 'Expression<\s*Func<[^>]*\[\]'
+    introduced_in: "net10.0"
+    effect: "runtime_failure_possible"
+    failure_class: runtime_failure
+    detail: "array.Contains(x) inside an expression tree may bind to MemoryExtensions.Contains, which some LINQ providers and the interpreter cannot handle."
+    repair:
+      id: span-expression-review
+      change_class: PROJECT_LOCAL
+      action: "Human review; a fix is to call Enumerable.Contains explicitly or cast to IEnumerable<T>."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/core-libraries/10.0/csharp-overload-resolution"
+
+  - id: SRC-BINARYFORMATTER
+    kind: source
+    title: "BinaryFormatter always throws (since .NET 9)"
+    glob: "**/*.cs"
+    pattern: '\bBinaryFormatter\b'
+    introduced_in: "net9.0"
+    effect: "runtime_failure"
+    failure_class: runtime_failure
+    detail: "Serialize/Deserialize throw PlatformNotSupportedException on .NET 9 and later."
+    repair:
+      id: binaryformatter-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: choose a replacement serializer. The compatibility package is a temporary bridge only."
+    reference: "https://learn.microsoft.com/dotnet/standard/serialization/binaryformatter-migration-guide/"
+
+  - id: SRC-ASPNET-WEBHOSTBUILDER
+    kind: source
+    title: "WebHostBuilder and IWebHost are obsolete in ASP.NET Core 10"
+    glob: "**/*.cs"
+    pattern: '\bnew\s+WebHostBuilder\b|\bWebHost\.CreateDefaultBuilder\b'
+    introduced_in: "net10.0"
+    effect: "obsolete_warning"
+    failure_class: analyzer_diagnostic
+    detail: "Builds with obsolete warnings; breaks builds that treat warnings as errors."
+    repair:
+      id: webhost-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: moving to WebApplication/HostBuilder is a hosting change, not a mechanical edit."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/aspnet-core/10/webhostbuilder-deprecated"
+
+  - id: SRC-ASPNET-WITHOPENAPI
+    kind: source
+    title: "WithOpenApi() is deprecated in ASP.NET Core 10"
+    glob: "**/*.cs"
+    pattern: '\.WithOpenApi\s*\('
+    introduced_in: "net10.0"
+    effect: "obsolete_warning"
+    failure_class: analyzer_diagnostic
+    repair:
+      id: withopenapi-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: move to the Microsoft.AspNetCore.OpenApi document/operation transformers."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/aspnet-core/10/withopenapi-deprecated"
+
+  - id: SRC-ASPNET-ACTIONCONTEXTACCESSOR
+    kind: source
+    title: "IActionContextAccessor is obsolete in ASP.NET Core 10"
+    glob: "**/*.cs"
+    pattern: '\bI?ActionContextAccessor\b'
+    introduced_in: "net10.0"
+    effect: "obsolete_warning"
+    failure_class: analyzer_diagnostic
+    repair:
+      id: actioncontext-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: use IHttpContextAccessor and the endpoint metadata instead."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/aspnet-core/10/iactioncontextaccessor-obsolete"
+
+  - id: SRC-ASPNET-RAZOR-RUNTIME
+    kind: source
+    title: "AddRazorRuntimeCompilation is obsolete in ASP.NET Core 10"
+    glob: "**/*.cs"
+    pattern: '\.AddRazorRuntimeCompilation\s*\('
+    introduced_in: "net10.0"
+    effect: "obsolete_warning"
+    failure_class: analyzer_diagnostic
+    repair:
+      id: razor-runtime-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: use Hot Reload during development instead."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/aspnet-core/10/razor-runtime-compilation-obsolete"
+
+  - id: SRC-BUFFEREDSTREAM-WRITEBYTE
+    kind: source
+    title: "BufferedStream.WriteByte no longer flushes implicitly"
+    glob: "**/*.cs"
+    pattern: '\bBufferedStream\b'
+    introduced_in: "net10.0"
+    effect: "silent_behavior_change"
+    failure_class: runtime_failure
+    repair:
+      id: bufferedstream-human-review
+      change_class: PROJECT_LOCAL
+      action: "Human review: add explicit Flush() where the code relied on the old behaviour."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/core-libraries/10.0/bufferedstream-writebyte-flush"
+
+  - id: PKG-INBOX-PRUNED
+    kind: package
+    title: "Direct references to packages already in the shared framework are pruned (NU1510)"
+    packages_any: ["System.Text.Json", "System.Memory", "System.Buffers", "System.Threading.Channels",
+                   "System.Collections.Immutable", "System.Diagnostics.DiagnosticSource", "Microsoft.Bcl.AsyncInterfaces",
+                   "System.Formats.Asn1", "System.IO.Pipelines"]
+    introduced_in: "net10.0"
+    effect: "warning_or_break"
+    expected_diagnostics: [NU1510]
+    failure_class: package_restore_failure
+    detail: "The .NET 10 SDK prunes these from restore and warns; builds treating warnings as errors fail."
+    repair:
+      id: inbox-package-condition
+      change_class: PROJECT_LOCAL
+      action: "Keep the reference only for older TFMs (condition on net8.0) or remove it once net10.0-only."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/sdk/10.0/nu1510-pruned-references"
+
+  - id: FILE-CI-SDK8
+    kind: file
+    title: "CI pins the .NET 8 SDK image"
+    files: [".gitlab-ci.yml", "azure-pipelines.yml", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    pattern: 'mcr\.microsoft\.com/dotnet/sdk:8\.0|dotnet-version:\s*[''"]?8\.0|version:\s*[''"]?8\.0\.x'
+    introduced_in: "net10.0"
+    effect: "ci_break"
+    failure_class: sdk_not_found
+    repair:
+      id: update-ci-sdk
+      change_class: REPOSITORY_GLOBAL
+      action: "Post-action in PHASE_1 (SDK global): make the .NET 10 SDK available in CI, plus the .NET 8 runtime while net8.0 targets remain."
+    reference: "https://learn.microsoft.com/dotnet/core/tools/global-json"
+
+  - id: FILE-DOCKER-NET8
+    kind: file
+    title: "Container base image is .NET 8 (and .NET 10 images default to Ubuntu)"
+    files: ["**/Dockerfile", "**/*.Dockerfile", "**/Dockerfile.*"]
+    pattern: 'mcr\.microsoft\.com/dotnet/(?:aspnet|runtime|runtime-deps|sdk):8\.0'
+    introduced_in: "net10.0"
+    effect: "deployment_change"
+    failure_class: platform_incompatibility
+    repair:
+      id: update-container-base-images
+      change_class: PROJECT_LOCAL
+      action: "Move the image tag to 10.0 together with the project's group; check apt/apk commands because the default distro changed to Ubuntu."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/containers/10.0/default-images-use-ubuntu"
+
+  - id: SDK-NUGET-AUDIT-TRANSITIVE
+    kind: diagnostic
+    title: "The .NET 10 SDK audits transitive packages; with warnings as errors, known vulnerabilities fail restore"
+    expected_diagnostics: [NU1901, NU1902, NU1903, NU1904]
+    introduced_in: "net10.0"
+    effect: "build_break"
+    failure_class: package_restore_failure
+    detail: "NuGetAuditMode defaults to 'all' from the .NET 10 SDK, so vulnerabilities in indirect packages now raise NU190x. Repositories with TreatWarningsAsErrors stop at restore. Seen in a real upgrade (a large open-source service monorepo set NuGetAuditLevel to critical)."
+    repair:
+      id: nuget-audit-policy
+      change_class: REPOSITORY_GLOBAL
+      action: "Human review: this is a security-policy decision, not a code fix, and vulnerability remediation is out of scope. Options: update the vulnerable package (separate work), or set NuGetAuditLevel / NuGetAuditMode / WarningsNotAsErrors in the root Directory.Build.props in PHASE_1."
+    reference: "https://learn.microsoft.com/nuget/concepts/auditing-packages"
+
+  - id: SRC-CONFIG-NULL-SETTER
+    kind: source
+    title: "Configuration binding now passes null to settings properties; setters that call methods on value crash"
+    glob: "**/*{Settings,Options,Config,Configuration}*.cs"
+    pattern: '(?<![?\w])value\.(?:Trim\w*|ToLower\w*|ToUpper\w*|Split|Replace|Substring|StartsWith|EndsWith|Length)\b'
+    introduced_in: "net10.0"
+    effect: "runtime_failure"
+    failure_class: test_regression
+    regression_message: "NullReferenceException"
+    detail: "Since .NET 10 the configuration binder preserves null values from configuration and calls the property setter with null. A setter such as `set => _x = value.Trim('\"')` throws NullReferenceException at startup. Seen in a real upgrade: one settings class made every web integration test fail (590 tests) until 13 setters used `value?.Trim(...)`."
+    repair:
+      id: config-null-safe-setter
+      change_class: PROJECT_LOCAL
+      action: "In settings/options setters, use null-conditional access (`value?.Trim(...)`) so a null configuration value stays null; keep the property type unchanged."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/extensions/10.0/configuration-null-values-preserved"
+
+  - id: PKG-DOWNGRADE-PIN
+    kind: diagnostic
+    title: "A pinned package version is now lower than what .NET 10-era dependencies require (NU1605)"
+    expected_diagnostics: [NU1605]
+    introduced_in: "net10.0"
+    effect: "build_break"
+    failure_class: package_restore_failure
+    detail: "Repositories often pin transitive packages (e.g. Microsoft.Extensions.Caching.Memory 8.0.1) for security fixes. Newer dependencies pulled in for .NET 10 require a higher version, and NU1605 is always an error. Seen in a real upgrade: one pin in a core library broke restore for 33 projects."
+    repair:
+      id: raise-or-remove-pin
+      change_class: PROJECT_LOCAL
+      action: "Raise the pin to the version named in the error, or remove it when the reason for pinning (a security fix) is now covered by the newer framework or dependency. The experiment already raises it in its disposable copy to measure further."
+    reference: "https://learn.microsoft.com/nuget/reference/errors-and-warnings/nu1605"
+
+  - id: SDK-MSBUILD-SDK-TOO-OLD
+    kind: diagnostic
+    title: "An MSBuild project SDK pinned in global.json does not work with the .NET 10 SDK (MSB4019)"
+    expected_diagnostics: [MSB4019]
+    introduced_in: "net10.0"
+    effect: "build_break"
+    failure_class: custom_msbuild_failure
+    detail: "MSBuild project SDKs from NuGet (Microsoft.Build.Sql, Microsoft.Build.Traversal, ...) import files from the .NET SDK. When an import is gone in SDK 10, the project fails with MSB4019. Seen in a real upgrade: Microsoft.Build.Sql 1.0.0 had to move to 2.x."
+    repair:
+      id: update-msbuild-sdk-pin
+      change_class: REPOSITORY_GLOBAL
+      action: "PHASE_1: update the msbuild-sdks pin in global.json (or the Sdk attribute version) to a release that supports the .NET 10 SDK; check the SDK's release notes."
+    reference: "https://learn.microsoft.com/visualstudio/msbuild/how-to-use-project-sdk"
+
+  - id: PKG-PRUNED-ANY
+    kind: diagnostic
+    title: "Any package reference the .NET 10 SDK considers unnecessary (NU1510)"
+    expected_diagnostics: [NU1510]
+    introduced_in: "net10.0"
+    effect: "warning_or_break"
+    failure_class: package_restore_failure
+    detail: "Catch-all for NU1510 on packages not in PKG-INBOX-PRUNED's list (seen: Microsoft.AspNetCore.Http 2.2 in an ASP.NET Core project, whose types now come from the shared framework)."
+    repair:
+      id: inbox-package-condition
+      change_class: PROJECT_LOCAL
+      action: "Remove the reference (or condition it on net8.0 while the project is multi-targeted)."
+    reference: "https://learn.microsoft.com/dotnet/core/compatibility/sdk/10.0/nu1510-pruned-references"

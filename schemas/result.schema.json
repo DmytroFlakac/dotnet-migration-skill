@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/result.schema.json",
+  "title": "dotnet-migration-skill result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "group_id",
+    "status",
+    "target_framework",
+    "recipe_ids",
+    "files_changed",
+    "transformations",
+    "repair_attempts",
+    "unresolved_items",
+    "excluded_work",
+    "proposed_global_changes",
+    "rollback",
+    "changes_persisted",
+    "rollback_verified",
+    "ready_for_human_review"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "mode": {
+      "enum": [
+        "implementation",
+        "global_phase"
+      ]
+    },
+    "group_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "enum": [
+        "SUCCESS",
+        "ROLLED_BACK",
+        "REJECTED",
+        "BLOCKED_DEPENDENCY_ORDER",
+        "BLOCKED_GLOBAL_PHASE_REQUIRED",
+        "SKIPPED_NOT_APPLICABLE",
+        "STARTED",
+        "BLOCKED_NOT_READY",
+        "NOTHING_TO_DO",
+        "VALIDATION_PASSED",
+        "VALIDATION_FAILED"
+      ]
+    },
+    "target_framework": {
+      "const": "net10.0"
+    },
+    "recipe_ids": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "transformations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "change_class"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "change_class": {
+            "enum": [
+              "PROJECT_LOCAL",
+              "GROUP_SHARED",
+              "REPOSITORY_GLOBAL",
+              null
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "repair_attempts": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "attempt",
+          "failures",
+          "selected_rules",
+          "files_changed",
+          "validation_result",
+          "next_action"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "failures": {
+            "type": "array",
+            "items": {}
+          },
+          "selected_rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files_changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "validation_result": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_attempted",
+              null
+            ]
+          },
+          "next_action": {
+            "enum": [
+              "final_gate",
+              "retry",
+              "rollback",
+              "stop_for_human_review",
+              null
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "unresolved_items": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "excluded_work": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "proposed_global_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "change"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "change": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "required": [
+        "performed",
+        "verified"
+      ],
+      "properties": {
+        "performed": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "changes_persisted": {
+      "const": false
+    },
+    "rollback_verified": {
+      "type": "boolean"
+    },
+    "ready_for_human_review": {
+      "type": "boolean"
+    },
+    "final_gate": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check",
+          "passed",
+          "detail"
+        ],
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "patch_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "PHASE_1_SDK_GLOBAL",
+        "PHASE_5_RETIRE_NET8",
+        "PHASE_6_CONVERGE",
+        "PHASE_7_REPO_VALIDATION",
+        "PHASE_8_CUTOVER"
+      ]
+    },
+    "manual_follow_ups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}

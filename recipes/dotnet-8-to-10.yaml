@@ -1,0 +1,92 @@
+# .NET 8 -> .NET 10 recipe.
+# A new, public-safe proposal written from public Microsoft documentation.
+schema_version: "1.0"
+recipe_id: "dotnet-8-to-10"
+display_name: "Upgrade .NET 8 projects to .NET 10"
+chain_group: "dotnet-runtime"
+chain_order: 10
+instruction_keywords: ["net10", ".net 10", "dotnet 10", "upgrade .net", "migrate to .net 10"]
+source:
+  frameworks: ["net8.0", "net8.0-windows"]
+target:
+  framework_map:
+    net8.0: net10.0
+    net8.0-windows: net10.0-windows
+  required_sdk_major: 10
+  language_version_default: "14.0"
+supported_project_styles: ["sdk-style"]
+unsupported_project_styles:
+  - style: "legacy (non-SDK) project"
+    action: "report as blocker; convert to SDK style is out of scope for this recipe"
+prerequisites:
+  required_sdk_major: 10
+  required_runtimes_for_validation: ["8.0", "10.0"]
+  clean_or_disposable_workspace: true
+applicability:
+  files: ["**/*.csproj", "**/*.fsproj", "**/*.vbproj", "global.json", "Directory.Build.props"]
+  patterns:
+    - "<TargetFramework>net8.0</TargetFramework>"
+    - "<TargetFrameworks>.*net8.0.*</TargetFrameworks>"
+phases:                         # migration phases, in order
+  - {id: PHASE_0_ANALYSIS, scope: REPOSITORY_GLOBAL, description: "Analyse the whole repository and build the project/consumer graph."}
+  - {id: PHASE_1_SDK_GLOBAL, scope: REPOSITORY_GLOBAL, description: "Make the .NET 10 SDK available globally while projects still target .NET 8."}
+  - {id: PHASE_2_SDK_BASELINE, scope: REPOSITORY_GLOBAL, description: "Prove the unchanged .NET 8 repository builds and tests with the .NET 10 SDK."}
+  - {id: PHASE_3_MULTITARGET_SHARED, scope: GROUP_SHARED, description: "Temporarily multi-target shared libraries used by mixed .NET 8/.NET 10 consumers."}
+  - {id: PHASE_4_GROUP_MIGRATION, scope: GROUP_SHARED, description: "Migrate connected application groups in dependency order."}
+  - {id: PHASE_5_RETIRE_NET8, scope: GROUP_SHARED, description: "Retire net8.0 from a shared library only after its last .NET 8 consumer migrates."}
+  - {id: PHASE_6_CONVERGE, scope: REPOSITORY_GLOBAL, description: "Converge central package versions and shared build files."}
+  - {id: PHASE_7_REPO_VALIDATION, scope: REPOSITORY_GLOBAL, description: "Run full repository-wide build/test/runtime validation."}
+  - {id: PHASE_8_CUTOVER, scope: REPOSITORY_GLOBAL, description: "Complete the final net10.0-only cutover (CI images, global.json policy)."}
+transformations:
+  sdk:
+    update_global_json: true            # only in PHASE_1, never inside a group run
+    roll_forward_policy: "latestFeature"
+  projects:
+    shared_library_policy: "MULTITARGET_UNTIL_LAST_CONSUMER"
+    preserve_multi_targeting: "until-last-net8-consumer"
+    update_target_frameworks: true
+  packages:
+    update_only_when_required_for_net10: true
+    central_package_strategies: ["ONE_VERSION_BOTH_TFMS", "CONDITIONAL_PER_TFM", "DEFER_AS_CROSS_GROUP_BLOCKER"]
+    coordinated_framework_prefixes:
+      - "Microsoft.Extensions."
+      - "Microsoft.AspNetCore."
+      - "Microsoft.EntityFrameworkCore"
+      - "System.Text.Json"
+  source:
+    rules_directory: "rules"
+    roslyn_code_fixes: []               # no tested Roslyn code fix is wired in yet
+post_actions:
+  - id: "update-ci-sdk"
+    scope: REPOSITORY_GLOBAL
+    required: "when CI pins SDK 8"
+  - id: "update-container-base-images"
+    scope: PROJECT_LOCAL
+    required: "when a Dockerfile uses a .NET 8 base image (note: .NET 10 images default to Ubuntu, not Debian)"
+compatibility_checks:
+  - nuget_target_assets
+  - coordinated_framework_packages
+  - source_generators
+  - analyzers
+  - aspnetcore
+  - efcore
+  - serialization
+  - csharp14_language
+  - windows_only_dependencies
+  - containers_and_ci
+validation:
+  restore: true
+  build: true
+  test: true
+  compare_with_baseline: true
+  test_per_tfm: true
+repairs:
+  max_attempts: 3
+  allow: [compatible_package_update, tested_roslyn_code_fix, recipe_defined_msbuild_fix, recipe_defined_source_fix]
+  deny: [unrelated_refactoring, architecture_change, speculative_package_upgrade, editing_tests_to_pass, vulnerability_remediation]
+rollback:
+  required_on_final_gate_failure: true
+references:
+  - "https://learn.microsoft.com/dotnet/core/compatibility/10"
+  - "https://learn.microsoft.com/dotnet/core/compatibility/9.0"
+  - "https://github.com/dotnet/skills (MIT): migrate-dotnet8-to-dotnet9, migrate-dotnet9-to-dotnet10"

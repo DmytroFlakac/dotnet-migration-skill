@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/request.schema.json",
+  "title": "dotnet-migration-skill request",
+  "type": "object",
+  "required": [
+    "repository_path",
+    "mode",
+    "target_framework"
+  ],
+  "properties": {
+    "repository_path": {
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "analysis",
+        "implementation"
+      ]
+    },
+    "target_framework": {
+      "const": "net10.0"
+    },
+    "selected_group_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allow_reversible_experiments": {
+      "type": "boolean"
+    },
+    "max_repair_attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "output_directory": {
+      "type": "string"
+    },
+    "network_policy": {
+      "type": "string"
+    },
+    "phase": {
+      "enum": [
+        "GROUP_MIGRATION",
+        "MULTITARGET_SHARED"
+      ]
+    },
+    "shared_library_policy": {
+      "const": "MULTITARGET_UNTIL_LAST_CONSUMER"
+    },
+    "allow_repository_global_changes": {
+      "type": "boolean"
+    },
+    "global_plan_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

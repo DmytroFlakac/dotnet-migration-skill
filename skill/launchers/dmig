@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Run the migration tool without installing it: dmig <command> <repository> [options]
+# Uses $DMIG_PYTHON if set, else python3, else python.
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export PYTHONPATH="$HERE/scripts${PYTHONPATH:+:$PYTHONPATH}"
+PY="${DMIG_PYTHON:-$(command -v python3 || command -v python)}"
+exec "$PY" -m dmig "$@"

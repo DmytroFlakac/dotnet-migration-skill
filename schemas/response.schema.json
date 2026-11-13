@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/response.schema.json",
+  "title": "dotnet-migration-skill response",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "mode",
+    "source_frameworks",
+    "target_framework",
+    "inventory_path",
+    "baseline_path",
+    "migration_plan_path",
+    "human_report_path",
+    "groups",
+    "changes_persisted",
+    "rollback_verified",
+    "unresolved_items",
+    "ready_for_human_review"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "READY_FOR_PLAN",
+        "READY_FOR_PLAN_WITH_LIMITATIONS",
+        "BLOCKED"
+      ]
+    },
+    "mode": {
+      "const": "analysis"
+    },
+    "source_frameworks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "target_framework": {
+      "type": "string"
+    },
+    "inventory_path": {
+      "type": "string"
+    },
+    "baseline_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "migration_plan_path": {
+      "type": "string"
+    },
+    "human_report_path": {
+      "type": "string"
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "group_id",
+          "order",
+          "readiness"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "readiness": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "changes_persisted": {
+      "const": false
+    },
+    "rollback_verified": {
+      "type": "boolean"
+    },
+    "unresolved_items": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ready_for_human_review": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

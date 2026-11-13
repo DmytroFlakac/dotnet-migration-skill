@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/inventory.schema.json",
+  "title": "dotnet-migration-skill inventory",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "repository_commit",
+    "solutions",
+    "projects",
+    "shared_build_files",
+    "central_package_files",
+    "ci_entrypoints",
+    "project_reference_edges",
+    "unresolved_imports"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "repository_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "solutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "projects"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target_frameworks",
+          "platform",
+          "sdk_style",
+          "evaluated",
+          "project_references",
+          "packages"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "application",
+              "library",
+              "test"
+            ]
+          },
+          "target_frameworks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "platform": {
+            "enum": [
+              "ANY",
+              "WINDOWS"
+            ]
+          },
+          "sdk_style": {
+            "type": "boolean"
+          },
+          "evaluated": {
+            "type": "boolean"
+          },
+          "project_references": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "packages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "version"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "shared_build_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "central_package_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ci_entrypoints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "project_reference_edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "unresolved_imports": {
+      "type": "array",
+      "items": {}
+    }
+  },
+  "additionalProperties": true
+}

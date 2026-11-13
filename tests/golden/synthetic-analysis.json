@@ -1,0 +1,113 @@
+{
+  "groups": [
+    {
+      "group_id": "shared-foundation",
+      "order": 1,
+      "group_kind": "SHARED_FOUNDATION",
+      "platform": "ANY",
+      "project_ids": [
+        "src/Shared/Shared.Core/Shared.Core.csproj"
+      ],
+      "test_project_ids": [
+        "tests/Shared.Core.Tests/Shared.Core.Tests.csproj"
+      ],
+      "depends_on_group_ids": [],
+      "readiness": "NEEDS_KNOWN_REPAIR"
+    },
+    {
+      "group_id": "component-legacyadmin",
+      "order": 2,
+      "group_kind": "STANDALONE_LIBRARY",
+      "platform": "WINDOWS",
+      "project_ids": [
+        "src/Tools/LegacyAdmin/LegacyAdmin.csproj"
+      ],
+      "test_project_ids": [],
+      "depends_on_group_ids": [
+        "shared-foundation"
+      ],
+      "readiness": "READY"
+    },
+    {
+      "group_id": "app-appa-web",
+      "order": 3,
+      "group_kind": "APPLICATION",
+      "platform": "ANY",
+      "project_ids": [
+        "src/AppA/AppA.Core/AppA.Core.csproj",
+        "src/AppA/AppA.Web/AppA.Web.csproj"
+      ],
+      "test_project_ids": [
+        "tests/AppA.Tests/AppA.Tests.csproj"
+      ],
+      "depends_on_group_ids": [
+        "shared-foundation"
+      ],
+      "readiness": "WAITS_FOR_DEPENDENCY_REPAIR"
+    },
+    {
+      "group_id": "app-appb-worker",
+      "order": 4,
+      "group_kind": "APPLICATION",
+      "platform": "ANY",
+      "project_ids": [
+        "src/AppB/AppB.Core/AppB.Core.csproj",
+        "src/AppB/AppB.Worker/AppB.Worker.csproj"
+      ],
+      "test_project_ids": [
+        "tests/AppB.Tests/AppB.Tests.csproj"
+      ],
+      "depends_on_group_ids": [
+        "shared-foundation"
+      ],
+      "readiness": "NEEDS_KNOWN_REPAIR"
+    }
+  ],
+  "shared_projects": [
+    {
+      "project_id": "src/Shared/Shared.Core/Shared.Core.csproj",
+      "temporary_tfms": [
+        "net8.0",
+        "net10.0"
+      ],
+      "consumer_groups": [
+        "app-appa-web",
+        "app-appb-worker",
+        "component-legacyadmin"
+      ]
+    }
+  ],
+  "baseline_failures": [
+    "AppA.Tests.InvoiceCalculatorTests.VatRate_Germany_KnownBaselineFailure"
+  ],
+  "baseline_totals": {
+    "total": 8,
+    "passed": 7,
+    "failed": 1
+  },
+  "experiment_new_errors": [
+    [
+      "CS0121",
+      "src/AppB/AppB.Core/AppB.Core.csproj"
+    ]
+  ],
+  "experiment_regressions": [
+    "AppA.Tests.InvoiceCalculatorTests.Total_SumsAllLines",
+    "Shared.Core.Tests.MoneyTests.Add_SameCurrency_SumsAmounts",
+    "Shared.Core.Tests.MoneyTests.Constructor_SetsAmount"
+  ],
+  "experiment_baseline_failures_kept": [
+    "AppA.Tests.InvoiceCalculatorTests.VatRate_Germany_KnownBaselineFailure"
+  ],
+  "phase_statuses": {
+    "PHASE_0_ANALYSIS": "DONE",
+    "PHASE_1_SDK_GLOBAL": "REQUIRED",
+    "PHASE_2_SDK_BASELINE": "DONE",
+    "PHASE_3_MULTITARGET_SHARED": "REQUIRED",
+    "PHASE_4_GROUP_MIGRATION": "REQUIRED",
+    "PHASE_5_RETIRE_NET8": "REQUIRED",
+    "PHASE_6_CONVERGE": "REQUIRED",
+    "PHASE_7_REPO_VALIDATION": "REQUIRED",
+    "PHASE_8_CUTOVER": "REQUIRED"
+  }
+}

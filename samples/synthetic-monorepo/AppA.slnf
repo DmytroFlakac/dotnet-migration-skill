@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "Monorepo.sln",
+    "projects": [
+      "src\\AppA\\AppA.Core\\AppA.Core.csproj",
+      "src\\AppA\\AppA.Web\\AppA.Web.csproj",
+      "src\\Shared\\Shared.Core\\Shared.Core.csproj",
+      "tests\\AppA.Tests\\AppA.Tests.csproj"
+    ]
+  }
+}

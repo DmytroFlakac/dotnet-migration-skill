@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/dmig-result.schema.json",
+  "title": "dotnet-migration-skill dmig-result",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "status",
+    "mode",
+    "sourceFrameworks",
+    "targetFramework",
+    "repositoryCommit",
+    "groupId",
+    "projectsDiscovered",
+    "projectsChanged",
+    "projectsSkipped",
+    "packageChanges",
+    "sourceChanges",
+    "globalChangesProposed",
+    "baseline",
+    "finalValidation",
+    "repairAttempts",
+    "manualActions",
+    "scopeViolations",
+    "rollback",
+    "artifacts",
+    "readyForHumanReview"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "SUCCEEDED",
+        "ROLLED_BACK",
+        "FAILED",
+        "BLOCKED"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "implementation",
+        "validation"
+      ]
+    },
+    "sourceFrameworks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "targetFramework": {
+      "type": "string"
+    },
+    "repositoryCommit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "groupId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "projectsDiscovered": {
+      "type": "integer"
+    },
+    "projectsChanged": {
+      "type": "integer"
+    },
+    "projectsSkipped": {
+      "type": "integer"
+    },
+    "packageChanges": {
+      "type": "array",
+      "items": {}
+    },
+    "sourceChanges": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "globalChangesProposed": {
+      "type": "array",
+      "items": {}
+    },
+    "baseline": {
+      "type": "object",
+      "required": [
+        "buildPassed",
+        "testsPassed",
+        "testsFailed",
+        "testsEnvironmentBlocked"
+      ],
+      "properties": {
+        "buildPassed": {
+          "type": "boolean"
+        },
+        "testsPassed": {
+          "type": "integer"
+        },
+        "testsFailed": {
+          "type": "integer"
+        },
+        "testsEnvironmentBlocked": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "finalValidation": {
+      "type": "object",
+      "required": [
+        "buildPassed",
+        "testsPassed",
+        "testsFailed",
+        "testsEnvironmentBlocked"
+      ],
+      "properties": {
+        "buildPassed": {
+          "type": "boolean"
+        },
+        "testsPassed": {
+          "type": "integer"
+        },
+        "testsFailed": {
+          "type": "integer"
+        },
+        "testsEnvironmentBlocked": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "repairAttempts": {
+      "type": "array",
+      "items": {}
+    },
+    "manualActions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scopeViolations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "required": [
+        "required",
+        "verified"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "object",
+      "required": [
+        "inventory",
+        "plan",
+        "report",
+        "doctor"
+      ],
+      "properties": {
+        "inventory": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "report": {
+          "type": "string"
+        },
+        "doctor": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "readyForHumanReview": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

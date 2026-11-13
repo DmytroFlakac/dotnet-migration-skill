@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dotnet-migration-skill/migration-plan.schema.json",
+  "title": "dotnet-migration-skill migration-plan",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "plan_id",
+    "recipe_id",
+    "target_framework",
+    "shared_library_policy",
+    "phases",
+    "groups",
+    "shared_projects",
+    "central_package_strategies",
+    "blockers",
+    "uncertainties",
+    "final_validation_plan"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "recipe_id": {
+      "type": "string"
+    },
+    "target_framework": {
+      "const": "net10.0"
+    },
+    "shared_library_policy": {
+      "const": "MULTITARGET_UNTIL_LAST_CONSUMER"
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "scope",
+          "status",
+          "items"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "PROJECT_LOCAL",
+              "GROUP_SHARED",
+              "REPOSITORY_GLOBAL"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "change"
+              ],
+              "properties": {
+                "change": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "group_id",
+          "name",
+          "order",
+          "group_kind",
+          "project_ids",
+          "test_project_ids",
+          "shared_project_ids",
+          "depends_on_group_ids",
+          "entrypoints",
+          "platform",
+          "platform_constraints",
+          "grouping_evidence",
+          "confidence",
+          "readiness",
+          "proposed_changes",
+          "implementation_request"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "group_kind": {
+            "enum": [
+              "SHARED_FOUNDATION",
+              "APPLICATION",
+              "STANDALONE_LIBRARY"
+            ]
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "test_project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "shared_project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "depends_on_group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entrypoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "platform": {
+            "enum": [
+              "ANY",
+              "WINDOWS"
+            ]
+          },
+          "platform_constraints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grouping_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "readiness": {
+            "enum": [
+              "READY",
+              "NEEDS_KNOWN_REPAIR",
+              "WAITS_FOR_DEPENDENCY_REPAIR",
+              "NEEDS_HUMAN_REVIEW",
+              "VALIDATION_REQUIRES_WINDOWS",
+              "BLOCKED_NEEDS_INVESTIGATION",
+              "NOT_VERIFIED_NO_EXPERIMENT",
+              "NOT_VERIFIED_NO_BASELINE"
+            ]
+          },
+          "proposed_changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "file",
+                "change_class",
+                "kind"
+              ],
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "change_class": {
+                  "enum": [
+                    "PROJECT_LOCAL",
+                    "GROUP_SHARED",
+                    "REPOSITORY_GLOBAL"
+                  ]
+                },
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "implementation_request": {
+            "type": "object",
+            "required": [
+              "phase",
+              "selected_group_id",
+              "shared_library_policy",
+              "allow_repository_global_changes",
+              "global_plan_id"
+            ],
+            "properties": {
+              "phase": {
+                "enum": [
+                  "GROUP_MIGRATION",
+                  "MULTITARGET_SHARED"
+                ]
+              },
+              "selected_group_id": {
+                "type": "string"
+              },
+              "shared_library_policy": {
+                "const": "MULTITARGET_UNTIL_LAST_CONSUMER"
+              },
+              "allow_repository_global_changes": {
+                "const": false
+              },
+              "global_plan_id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "shared_projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "current_consumers",
+          "remaining_net8_consumers",
+          "temporary_tfms",
+          "retirement_condition_for_net8",
+          "package_strategy_per_tfm",
+          "owning_migration_phase",
+          "validation_matrix"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "current_consumers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remaining_net8_consumers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "temporary_tfms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "retirement_condition_for_net8": {
+            "type": "string"
+          },
+          "package_strategy_per_tfm": {
+            "type": "array",
+            "items": {}
+          },
+          "owning_migration_phase": {
+            "type": "string"
+          },
+          "validation_matrix": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "tfm",
+                "build",
+                "tests"
+              ],
+              "properties": {
+                "tfm": {
+                  "type": "string"
+                },
+                "build": {
+                  "type": "boolean"
+                },
+                "tests": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "central_package_strategies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "package",
+          "strategy",
+          "change_class"
+        ],
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "strategy": {
+            "enum": [
+              "ONE_VERSION_BOTH_TFMS",
+              "CONDITIONAL_PER_TFM",
+              "DEFER_AS_CROSS_GROUP_BLOCKER",
+              "UNKNOWN"
+            ]
+          },
+          "change_class": {
+            "enum": [
+              "PROJECT_LOCAL",
+              "GROUP_SHARED",
+              "REPOSITORY_GLOBAL"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "final_validation_plan": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}

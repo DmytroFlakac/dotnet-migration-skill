@@ -1,0 +1,3 @@
+# Supported ranges (the exact versions last tested are in requirements.lock). Python 3.11+.
+pyyaml>=6,<7
+jsonschema>=4.20,<5
