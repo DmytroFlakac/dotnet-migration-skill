@@ -31,9 +31,12 @@ def migration() -> Path:
     shutil.copytree(ROOT / "skill" / "references", dist / "references")
     shutil.copytree(ROOT / "src" / "dmig", dist / "scripts" / "dmig", ignore=IGNORE)
     shutil.copytree(ROOT / "src" / "obsreport", dist / "scripts" / "obsreport", ignore=IGNORE)
-    shutil.copytree(ROOT / "recipes", dist / "recipes")
+    shutil.copytree(ROOT / "recipes", dist / "recipes", ignore=IGNORE)
+    shutil.copytree(ROOT / "fixtures", dist / "fixtures")  # the mock package catalogue
     shutil.copytree(ROOT / "schemas", dist / "schemas", ignore=shutil.ignore_patterns("make_schemas.py"))
-    for name in ("requirements.txt", "requirements.lock", "CHANGELOG.md"):
+    (dist / "docs").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "docs" / "integration-contract.md", dist / "docs" / "integration-contract.md")
+    for name in ("requirements.txt", "requirements-dev.txt", "requirements.lock", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(ROOT / name, dist / name)
     # `dmig` without installing anything: starter files next to SKILL.md (Windows and Linux/macOS)
     for name in ("dmig", "dmig.cmd"):

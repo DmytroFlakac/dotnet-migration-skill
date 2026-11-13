@@ -12,11 +12,6 @@ import os
 import platform
 import re
 import shutil
-import socket
-import ssl
-import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -93,32 +88,6 @@ def package_sources(repo: Path) -> list[dict]:
     return list(sources.values())
 
 
-def probe_source(url: str, timeout_s: int = 15) -> dict:
-    """Reachability, TLS trust and authentication of one feed, without sending credentials."""
-    if not url.lower().startswith(("http://", "https://")):
-        return {"status": "LOCAL_PATH", "detail": "local folder feed; existence checked only",
-                "reachable": Path(url).exists()}
-    req = urllib.request.Request(url, headers={"User-Agent": "dmig-preflight/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            return {"status": "OK", "http_status": resp.status}
-    except urllib.error.HTTPError as exc:
-        status = {401: "AUTH_REQUIRED", 403: "FORBIDDEN", 404: "NOT_FOUND"}.get(exc.code, "HTTP_ERROR")
-        detail = {401: "credential or authorization failure: the adapter must inject credentials",
-                  403: "credential or authorization failure",
-                  404: "feed URL or package/version not present"}.get(exc.code, f"HTTP {exc.code}")
-        return {"status": status, "http_status": exc.code, "detail": detail}
-    except urllib.error.URLError as exc:
-        reason = exc.reason
-        if isinstance(reason, ssl.SSLError):
-            return {"status": "TLS_FAILURE", "detail": f"network or trust failure: {reason}"}
-        if isinstance(reason, socket.gaierror):
-            return {"status": "DNS_FAILURE", "detail": f"network failure: {reason}"}
-        return {"status": "NETWORK_FAILURE", "detail": f"network failure: {reason}"}
-    except (TimeoutError, socket.timeout):
-        return {"status": "TIMEOUT", "detail": "network failure: timeout"}
-
-
 def _quick_platform_scan(repo: Path) -> bool:
     """True when any project needs Windows (TFM *-windows, WinForms, WPF)."""
     for path in iter_repo_files(repo):
@@ -144,7 +113,7 @@ def neutral_query_dir(repo: Path, out_dir: Path) -> Path:
     return q
 
 
-def probe_sources_with_dotnet(runner: Runner, query_dir: Path) -> list[dict] | None:
+def probe_sources_with_dotnet(runner: Runner, query_dir: Path, probe: bool = True) -> list[dict] | None:
     """Every enabled package source as NuGet itself sees it (repository + user + machine config),
     each probed through the SDK, so organisation credential providers, proxies and certificates apply.
     None when the SDK cannot list sources (then the HTTP probe is used)."""
@@ -158,6 +127,11 @@ def probe_sources_with_dotnet(runner: Runner, query_dir: Path) -> list[dict] | N
             continue
         url = m.group(2)
         src = {"name": url, "url": url, "origin": "nuget-configuration"}
+        if not probe and url.lower().startswith("http"):
+            src.update(status="NOT_PROBED", detail=f"not probed (--offline): would check {url} with "
+                                                   f"`dotnet package search {PROBE_PACKAGE}`")
+            sources.append(src)
+            continue
         if not url.lower().startswith("http"):
             src.update(status="LOCAL_PATH" if Path(url).exists() else "FEED_UNREACHABLE",
                        detail="local folder" if Path(url).exists() else "local folder does not exist")
@@ -174,16 +148,29 @@ def probe_sources_with_dotnet(runner: Runner, query_dir: Path) -> list[dict] | N
         for s in data.get("searchResult", []):
             problems += [str(p.get("text", p)) for p in (s.get("problems") or [])]
         text = " ".join(problems) or ("" if data else r.tail(3))
-        if not text:
-            src.update(status="OK", detail="reachable through the SDK (credentials and proxy as for restore)")
-        elif re.search(r"\b401\b|unauthori[sz]ed|credential", text, re.I):
-            src.update(status="AUTH_REQUIRED", detail="the SDK could not log in: " + text[:200])
-        elif re.search(r"\b403\b|forbidden", text, re.I):
-            src.update(status="FORBIDDEN", detail="access denied: " + text[:200])
-        else:
-            src.update(status="FEED_UNREACHABLE", detail=text[:200])
+        src.update(classify_feed_problem(text))
         sources.append(src)
     return sources
+
+
+def classify_feed_problem(text: str) -> dict:
+    """What `dotnet package search --source <feed>` said, as one status per feed:
+    401/403 (login or access), 404 (wrong URL), DNS (name not resolvable), timeout, or other network failure."""
+    t = text[:200]
+    if not text:
+        return {"status": "OK", "detail": "reachable through the SDK (credentials and proxy as for restore)"}
+    if re.search(r"\b401\b|unauthori[sz]ed|credential", text, re.I):
+        return {"status": "AUTH_REQUIRED", "detail": "the SDK could not log in (401): " + t}
+    if re.search(r"\b403\b|forbidden", text, re.I):
+        return {"status": "FORBIDDEN", "detail": "access denied (403): " + t}
+    if re.search(r"\b404\b|not ?found", text, re.I):
+        return {"status": "NOT_FOUND", "detail": "the feed URL does not exist (404): " + t}
+    if re.search(r"no such host|name or service not known|could not resolve|nodename nor servname|"
+                 r"name resolution|host is not known|\bDNS\b", text, re.I):
+        return {"status": "DNS_FAILURE", "detail": "the feed's host name cannot be resolved (DNS): " + t}
+    if re.search(r"time(d)?[ -]?out|timeout", text, re.I):
+        return {"status": "TIMEOUT", "detail": "no answer in time (timeout): " + t}
+    return {"status": "FEED_UNREACHABLE", "detail": t}
 
 
 def run_preflight(repo: Path, out_dir: Path, runner: Runner, probe_network: bool = True,
@@ -260,24 +247,27 @@ def run_preflight(repo: Path, out_dir: Path, runner: Runner, probe_network: bool
               f"at least {MIN_FREE_DISK_MB} MB is required for builds and the disposable worktree.")
 
     # 4. Package feeds ----------------------------------------------------------------------
-    via_sdk = probe_sources_with_dotnet(runner, neutral_query_dir(repo, out_dir)) if probe_network else None
-    sources = via_sdk if via_sdk is not None else package_sources(repo)
+    # The configured feeds are the allowed ones (restore uses them anyway), so each is probed by default
+    # through the SDK; --offline skips it. No other address is ever contacted here.
+    via_sdk = probe_sources_with_dotnet(runner, neutral_query_dir(repo, out_dir), probe=probe_network)
+    # Without the SDK the feeds are only read from NuGet.config, never contacted: the tool has no HTTP
+    # client of its own (all package traffic goes through dotnet and the configured feeds).
+    sources = via_sdk if via_sdk is not None else [
+        dict(s, status="NOT_PROBED", detail="the SDK could not list the feeds, so they were not checked")
+        for s in package_sources(repo)]
+    reachable = any(s["status"] in {"OK", "LOCAL_PATH"} for s in sources)
+    probed = [s for s in sources if s["status"] != "NOT_PROBED"]
     for src in sources:
-        if via_sdk is not None:
-            result = {}  # already probed through the SDK
-        elif probe_network:
-            result = probe_source(src["url"])
-            if result["status"] in {"DNS_FAILURE", "NETWORK_FAILURE", "TIMEOUT"}:
-                time.sleep(3)  # one retry: transient DNS/network errors are common in agent sandboxes
-                result = probe_source(src["url"])
-                result["retried"] = True
+        if src["status"] in {"OK", "LOCAL_PATH", "NOT_PROBED"}:
+            continue
+        code = "FEED_AUTH_UNAVAILABLE" if src["status"] in {"AUTH_REQUIRED", "FORBIDDEN"} else "FEED_UNREACHABLE"
+        text = f"Package source `{src['name']}`: {src.get('detail', src['status'])}."
+        if reachable:  # another feed works: restore may still succeed, so this is a limitation
+            limit(code, text, "restore of packages only this feed has")
         else:
-            result = {"status": "NOT_PROBED"}
-        src.update(result)
-        if src["status"] in {"AUTH_REQUIRED", "FORBIDDEN"}:
-            block("FEED_AUTH_UNAVAILABLE", f"Package source `{src['name']}`: {src['detail']}.")
-        elif src["status"] not in {"OK", "LOCAL_PATH", "NOT_PROBED"}:
-            block("FEED_UNREACHABLE", f"Package source `{src['name']}`: {src.get('detail', src['status'])}.")
+            block(code, text)
+    if probed and not reachable:
+        limit("NO_REACHABLE_FEED", "No configured package feed answered: restore will fail here.", "restore, build, tests")
     if not sources and via_sdk is None:
         limit("NO_REPO_FEEDS", "No NuGet.config in the repository; restore relies on machine/user "
               "configuration supplied by the environment.", "restore")

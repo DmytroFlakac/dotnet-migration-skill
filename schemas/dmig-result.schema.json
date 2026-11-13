@@ -23,6 +23,13 @@
     "manualActions",
     "scopeViolations",
     "rollback",
+    "groups",
+    "changes",
+    "repairs",
+    "stopReason",
+    "missingCapabilities",
+    "unvalidated",
+    "rollbackVerified",
     "artifacts",
     "readyForHumanReview"
   ],
@@ -33,9 +40,10 @@
     "status": {
       "enum": [
         "SUCCEEDED",
-        "ROLLED_BACK",
+        "PARTIAL",
+        "BLOCKED",
         "FAILED",
-        "BLOCKED"
+        "ROLLED_BACK"
       ]
     },
     "mode": {
@@ -168,22 +176,57 @@
       },
       "additionalProperties": true
     },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "changes": {
+      "type": "array",
+      "items": {}
+    },
+    "repairs": {
+      "type": "array",
+      "items": {}
+    },
+    "stopReason": {
+      "type": "string"
+    },
+    "missingCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unvalidated": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollbackVerified": {
+      "type": "boolean"
+    },
     "artifacts": {
       "type": "object",
       "required": [
-        "inventory",
-        "plan",
-        "report",
-        "doctor"
+        "report"
       ],
       "properties": {
+        "report": {
+          "type": "string"
+        },
+        "patch": {
+          "type": "string"
+        },
         "inventory": {
           "type": "string"
         },
         "plan": {
           "type": "string"
         },
-        "report": {
+        "analysisReport": {
           "type": "string"
         },
         "doctor": {

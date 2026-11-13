@@ -2,6 +2,7 @@
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from dmig.buildtest import parse_diagnostics
 from dmig.compat import load_recipe, review_checklist, technologies
 from dmig.drafts import build_drafts, write_drafts
 
-from conftest import ROOT, SAMPLE, dotnet_path
+from conftest import FULL, ROOT, SAMPLE, dotnet_path, requires, sample_nuget_config
 
 RECIPE = load_recipe(ROOT / "recipes")
 GIT = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
@@ -32,7 +33,7 @@ def test_catalogue_is_complete_and_well_formed():
 
 def test_catalogue_is_regenerated_from_the_committed_sources(tmp_path):
     before = (ROOT / "recipes" / "rules" / "catalog.yaml").read_text(encoding="utf-8")
-    subprocess.run(["python", str(ROOT / "recipes" / "build_catalog.py")], check=True, capture_output=True)
+    subprocess.run([sys.executable, str(ROOT / "recipes" / "build_catalog.py")], check=True, capture_output=True)
     assert (ROOT / "recipes" / "rules" / "catalog.yaml").read_text(encoding="utf-8") == before
 
 
@@ -67,7 +68,7 @@ def test_rule_drafts_carry_everything_known(tmp_path):
     assert yaml.safe_load(text)["rules"][0]["status"] == "draft"
 
 
-@pytest.mark.skipif(dotnet_path() is None, reason="dotnet not available")
+@requires(*FULL)
 def test_obsolete_api_and_pruned_package_fixture(tmp_path: Path):
     """Sample + System.Text.Json reference (NU1510 as error) + an API obsolete in .NET 10 (SYSLIB0060)."""
     from dmig.analysis import RECIPES, run_analysis
@@ -76,6 +77,8 @@ def test_obsolete_api_and_pruned_package_fixture(tmp_path: Path):
 
     repo = tmp_path / "repo"
     shutil.copytree(SAMPLE, repo, ignore=shutil.ignore_patterns("bin", "obj"))
+    if sample_nuget_config():
+        (repo / "NuGet.config").write_text(sample_nuget_config(), encoding="utf-8")
     props = repo / "Directory.Packages.props"
     props.write_text(props.read_text().replace(
         '<PackageVersion Include="System.Linq.Async" Version="6.0.1" />',
@@ -96,14 +99,14 @@ def test_obsolete_api_and_pruned_package_fixture(tmp_path: Path):
         subprocess.run(GIT + args, cwd=repo, check=True, capture_output=True)
 
     out = tmp_path / "analysis"
-    run_analysis(repo, out, Runner(dotnet_path(), out / "logs"), {"run_baseline": True, "probe_network": True})
+    run_analysis(repo, out, Runner(dotnet_path(), out / "logs"), {"run_baseline": True})
     plan = json.loads((out / "migration-plan.json").read_text(encoding="utf-8"))
     groups = {g["group_id"]: g for g in plan["groups"]}
     # The pruned-package error is attributed to AppB and explained; behind that restore wall the
     # layered experiment also reaches the System.Linq.Async clash. Other groups stay verified.
     assert sorted({(e["code"], e["matched_rule"]) for e in groups["app-appb-worker"]["experiment"]["new_errors"]}) \
         == [("CS0121", "PKG-LINQ-ASYNC"), ("NU1510", "PKG-INBOX-PRUNED")]
-    assert groups["component-legacyadmin"]["readiness"] == "READY"
+    assert groups["component-legacyadmin"]["readiness"] == "OUT_OF_SCOPE_REPORT_ONLY"  # WinForms: report only
 
     preflight = json.loads((out / "preflight.json").read_text(encoding="utf-8"))
     runner = lambda o: Runner(dotnet_path(), o / "logs")  # noqa: E731

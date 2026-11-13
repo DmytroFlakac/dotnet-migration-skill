@@ -32,13 +32,32 @@ Nothing is installed. Copy the packaged skill folder (`python scripts/package_sk
 (Linux/macOS). From a source checkout: `PYTHONPATH=src python -m dmig <command> <repo>`.
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt     # tests: also requirements-dev.txt
 dmig doctor  path/to/repo
 dmig analyze path/to/repo --target net10.0
 ```
 
-A package mirror can be described with `--package-catalog mirror.json` (format:
-`samples/package-catalog.fixture.json`): only approved versions are ever chosen.
+**Defaults are strict:**
+
+- **No network client of its own.** Everything about packages goes through `dotnet` and the feeds
+  configured on the machine; those feeds are checked by default (`--offline` skips it). The public
+  nuget.org catalogue is used only with `--allow-public-nuget`. Package versions come from a local
+  catalogue file, `--package-catalog mirror.json` (format: `fixtures/package-catalog.json`): only
+  approved versions are chosen; a missing one is `PACKAGE_UNAVAILABLE`, and without a catalogue
+  versions are `METADATA_UNAVAILABLE`, never guessed or fetched elsewhere.
+- **Framework add-ons are off.** Default scope: class libraries, console apps, worker services and
+  test projects. `--adapters aspnet_core,efcore,windows_service` enables the others. .NET
+  Framework, WPF, WinForms, MAUI, Xamarin and Azure Functions are report-only. Out-of-scope
+  projects are listed (`OUT_OF_SCOPE_ADAPTER_DISABLED` / `OUT_OF_SCOPE_REPORT_ONLY`), never
+  silently dropped.
+- **Locked-down Windows friendly.** Plain-ASCII console output, no `sh`/`bash`/`sed`, git hooks
+  off, always `python -m ...`. A .NET 8 runtime installed in another dotnet folder is found (or
+  given with `--dotnet-root`) and combined with the SDK without changing any installation.
+
+Integration points are interfaces with mocks in `src/dmig/adapters/` (`IPackageCatalog`,
+`ISourceControl`, `IWorkItemAdapter`, `ISecretProvider`, `ICiExecutor`, `ITelemetry`, `IDelivery`);
+inputs, outputs, every status and exit code are in
+[`docs/integration-contract.md`](docs/integration-contract.md).
 
 ## Safety net
 
@@ -68,15 +87,20 @@ regressions, 590 of them from one settings class) matched a change in the mainta
 | `src/obsreport/` | notes, size-limited diagrams, Canvas, validator (no .NET knowledge) |
 | `recipes/` | the recipe, hand-written rules, and a catalogue generated from Microsoft's breaking-change lists |
 | `schemas/` | JSON schemas every output is validated against |
-| `samples/` | a synthetic monorepo and a package-mirror fixture used by the tests |
-| `tests/` | unit, real-repository lessons, contract and full-lifecycle tests |
+| `samples/` | a synthetic monorepo used by the tests (copied, never changed) |
+| `fixtures/` | the mock package catalogue (`package-catalog.json`) |
+| `tests/` | unit, real-repository lessons, contract, offline, adapter and full-lifecycle tests (run with networking disabled) |
 
 ## Tests
 
 ```bash
-python -m pytest tests/test_units.py tests/test_real_repo_lessons.py tests/test_obsreport.py   # fast, no dotnet
-DMIG_DOTNET=<dotnet with SDK 10 + runtimes 8> python -m pytest                                 # everything
+python -m pytest                          # offline: tests that need a feed are skipped, each with its reason
+DMIG_TEST_NETWORK=1 python -m pytest      # also the tests that restore packages from the configured feeds
 ```
 
-Breaking-change knowledge is derived from Microsoft's public documentation (see
-`recipes/sources/README.md`). Status and changes: `CHANGELOG.md`.
+Tests that need something the machine lacks (SDK 10, a .NET 8 runtime, a reachable feed, git
+worktrees) are skipped, and the skip names it. `DMIG_NUGET_SOURCE` points the sample at one feed
+(a URL or a local folder); `DMIG_DOTNET_ROOTS` names extra dotnet folders.
+
+Breaking-change knowledge is derived from Microsoft's public documentation; attributions and
+dependency licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Changes: `CHANGELOG.md`.

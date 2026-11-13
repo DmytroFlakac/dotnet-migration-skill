@@ -27,14 +27,23 @@ TEST = obj({"project": STR, "test": STR,
 COMMAND = obj({"command": STR, "exit_code": INT, "duration_s": NUM, "log": NSTR})
 
 SCHEMAS = {
-    "request": obj({"repository_path": STR, "mode": {"enum": ["analysis", "implementation"]},
-                    "target_framework": {"const": "net10.0"}},
-                   {"selected_group_id": NSTR, "allow_reversible_experiments": BOOL,
+    # the contract's camelCase names or the earlier snake_case names; contract.normalize_request maps them
+    "request": {**obj({}, {"repository": STR, "mode": {"enum": ["analysis", "implementation", "global", "validate",
+                                                                "validation", "rollback"]},
+                           "targetFramework": {"const": "net10.0"}, "group": NSTR,
+                           "maxRepairs": {"type": "integer", "minimum": 0, "maximum": 3},
+                           "outputDir": STR, "allowPublicNuget": BOOL,
+                           "repository_path": STR, "target_framework": {"const": "net10.0"},
+                           "allow_public_nuget": BOOL, "selected_group_id": NSTR, "allow_reversible_experiments": BOOL,
                     "max_repair_attempts": {"type": "integer", "minimum": 0, "maximum": 3},
                     "output_directory": STR, "network_policy": STR,
                     "phase": {"enum": ["GROUP_MIGRATION", "MULTITARGET_SHARED"]},
                     "shared_library_policy": {"const": "MULTITARGET_UNTIL_LAST_CONSUMER"},
-                    "allow_repository_global_changes": BOOL, "global_plan_id": STR}),
+                    "allow_repository_global_changes": BOOL, "global_plan_id": STR,
+                    "allow_network": BOOL, "package_catalog": NSTR,
+                    "adapters": arr({"enum": ["aspnet_core", "efcore", "windows_service"]}),
+                    "scope": {"enum": ["group", "repository"]}, "time_budget_minutes": {"type": ["number", "null"]}}),
+                "anyOf": [{"required": ["repository", "mode"]}, {"required": ["repository_path", "mode"]}]},
     "preflight": obj({
         "schema_version": {"const": "1.0"},
         "status": {"enum": ["READY", "READY_WITH_LIMITATIONS", "BLOCKED"]},
@@ -84,8 +93,9 @@ SCHEMAS = {
             "platform_constraints": arr(STR), "grouping_evidence": arr(STR),
             "confidence": {"enum": ["high", "medium", "low"]},
             "readiness": {"enum": ["READY", "NEEDS_KNOWN_REPAIR", "WAITS_FOR_DEPENDENCY_REPAIR", "NEEDS_HUMAN_REVIEW",
-                                   "VALIDATION_REQUIRES_WINDOWS", "BLOCKED_NEEDS_INVESTIGATION",
-                                   "NOT_VERIFIED_NO_EXPERIMENT", "NOT_VERIFIED_NO_BASELINE"]},
+                                   "BLOCKED_PLATFORM", "BLOCKED_NEEDS_INVESTIGATION",
+                                   "NOT_VERIFIED_NO_EXPERIMENT", "NOT_VERIFIED_NO_BASELINE",
+                                   "OUT_OF_SCOPE_ADAPTER_DISABLED", "OUT_OF_SCOPE_REPORT_ONLY"]},
             "proposed_changes": arr(obj({"file": STR, "change_class": CHANGE_CLASS, "kind": STR})),
             "implementation_request": obj({
                 "phase": {"enum": ["GROUP_MIGRATION", "MULTITARGET_SHARED"]}, "selected_group_id": STR,
@@ -118,11 +128,12 @@ SCHEMAS = {
         "schema_version": {"const": "1.0"}, "mode": {"enum": ["implementation", "global_phase"]}, "group_id": NSTR,
         "status": {"enum": ["SUCCESS", "ROLLED_BACK", "REJECTED", "BLOCKED_DEPENDENCY_ORDER",
                             "BLOCKED_GLOBAL_PHASE_REQUIRED", "SKIPPED_NOT_APPLICABLE", "STARTED",
-                            "BLOCKED_NOT_READY", "NOTHING_TO_DO", "VALIDATION_PASSED", "VALIDATION_FAILED"]},
+                            "BLOCKED_NOT_READY", "NOTHING_TO_DO", "VALIDATION_PASSED", "VALIDATION_FAILED",
+                            "BLOCKED_PLATFORM"]},
         "target_framework": {"const": "net10.0"}, "recipe_ids": arr(NSTR), "files_changed": arr(STR),
         "transformations": arr(obj({"kind": STR, "change_class": {"enum": ["PROJECT_LOCAL", "GROUP_SHARED", "REPOSITORY_GLOBAL", None]}})),
         "repair_attempts": {"type": "array", "maxItems": 3, "items": obj({
-            "attempt": {"type": "integer", "minimum": 1, "maximum": 3}, "failures": arr(),
+            "attempt": {"type": "integer", "minimum": 0, "maximum": 3}, "failures": arr(),  # 0: stopped before any repair
             "selected_rules": arr(STR), "files_changed": arr(STR),
             "validation_result": {"enum": ["passed", "failed", "not_attempted", None]},
             "next_action": {"enum": ["final_gate", "retry", "rollback", "stop_for_human_review", None]}})},
@@ -131,6 +142,7 @@ SCHEMAS = {
         "rollback_verified": BOOL,
         "ready_for_human_review": BOOL,
     }, {"final_gate": arr(obj({"check": STR, "passed": BOOL, "detail": STR})), "patch_path": NSTR,
+        "stop_reason": NSTR, "missing_capabilities": arr(STR),
         "phase": {"enum": ["PHASE_1_SDK_GLOBAL", "PHASE_5_RETIRE_NET8", "PHASE_6_CONVERGE",
                            "PHASE_7_REPO_VALIDATION", "PHASE_8_CUTOVER"]},
         "manual_follow_ups": arr(STR)}),
@@ -138,7 +150,7 @@ SCHEMAS = {
     # The integration result shape, written next to result.json.
     "dmig-result": obj({
         "schemaVersion": {"const": "1.0"},
-        "status": {"enum": ["SUCCEEDED", "ROLLED_BACK", "FAILED", "BLOCKED"]},
+        "status": {"enum": ["SUCCEEDED", "PARTIAL", "BLOCKED", "FAILED", "ROLLED_BACK"]},
         "mode": {"enum": ["implementation", "validation"]},
         "sourceFrameworks": arr(STR), "targetFramework": STR, "repositoryCommit": NSTR, "groupId": NSTR,
         "projectsDiscovered": INT, "projectsChanged": INT, "projectsSkipped": INT,
@@ -148,7 +160,11 @@ SCHEMAS = {
                                 "testsEnvironmentBlocked": INT}),
         "repairAttempts": arr(), "manualActions": arr(STR), "scopeViolations": arr(STR),
         "rollback": obj({"required": BOOL, "verified": BOOL}),
-        "artifacts": obj({"inventory": STR, "plan": STR, "report": STR, "doctor": STR}),
+        # integration contract fields
+        "groups": arr(STR), "changes": arr(), "repairs": arr(), "stopReason": STR,
+        "missingCapabilities": arr(STR), "unvalidated": arr(STR), "rollbackVerified": BOOL,
+        "artifacts": obj({"report": STR}, {"patch": STR, "inventory": STR, "plan": STR, "analysisReport": STR,
+                                            "doctor": STR}),
         "readyForHumanReview": BOOL,
     }),
 }

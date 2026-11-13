@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,11 @@ class RunResult:
             "timed_out": self.timed_out,
             "log": self.log_path,
         }
+
+
+_EMPTY_HOOKS = Path(tempfile.gettempdir()) / "dmig-no-hooks"
+_EMPTY_HOOKS.mkdir(exist_ok=True)
+NO_HOOKS = ["-c", f"core.hooksPath={_EMPTY_HOOKS}", "-c", "core.fsmonitor=false"]
 
 
 class Runner:
@@ -112,4 +118,6 @@ class Runner:
         return RunResult(cmd, str(cwd), code, duration, log_path, output, timed_out, stdout)
 
     def git(self, args: list[str], cwd: Path, name: str = "git", timeout_s: int = 300) -> RunResult:
-        return self.run(args, cwd, name, timeout_s, program="git")
+        # Hooks and fsmonitor scripts off: Git for Windows runs them through sh, which locked-down
+        # machines cannot start (0xC0000142), and a throwaway copy needs none of them.
+        return self.run([*NO_HOOKS, *args], cwd, name, timeout_s, program="git")

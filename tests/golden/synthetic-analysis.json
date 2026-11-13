@@ -26,7 +26,7 @@
       "depends_on_group_ids": [
         "shared-foundation"
       ],
-      "readiness": "READY"
+      "readiness": "OUT_OF_SCOPE_REPORT_ONLY"
     },
     {
       "group_id": "app-appa-web",
@@ -43,7 +43,7 @@
       "depends_on_group_ids": [
         "shared-foundation"
       ],
-      "readiness": "WAITS_FOR_DEPENDENCY_REPAIR"
+      "readiness": "OUT_OF_SCOPE_ADAPTER_DISABLED"
     },
     {
       "group_id": "app-appb-worker",

@@ -10,7 +10,7 @@ import pytest
 from dmig import cli
 from dmig.contract import to_contract
 
-from conftest import ROOT, dotnet_path
+from conftest import CATALOG, FULL, ROOT, dotnet_path, requires
 
 GIT = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
 
@@ -84,13 +84,13 @@ def test_rollback_cleans_a_left_over_workspace(tmp_path: Path):
     assert "git apply -R" in report["notes"][0]
 
 
-@pytest.mark.skipif(not dotnet_path(), reason="needs dotnet with SDK 10 + runtime 8")
+@requires(*FULL)
 def test_validate_one_group_changes_nothing(sample_repo: Path, tmp_path: Path):
     from dmig.analysis import run_analysis
     from dmig.dotnet import Runner
     from dmig.validate import validate_group
     out = tmp_path / "analysis"
-    run_analysis(sample_repo, out, Runner(dotnet_path(), out / "logs"), {"run_baseline": True, "probe_network": False,
+    run_analysis(sample_repo, out, Runner(dotnet_path(), out / "logs"), {"run_baseline": True, "package_catalog": str(CATALOG),
                                                                           "allow_reversible_experiments": False})
     plan = json.loads((out / "migration-plan.json").read_text(encoding="utf-8"))
     baseline = json.loads((out / "baseline.json").read_text(encoding="utf-8"))

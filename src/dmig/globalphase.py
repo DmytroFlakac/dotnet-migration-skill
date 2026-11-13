@@ -21,6 +21,7 @@ from pathlib import Path
 
 import yaml
 
+from .console import progress
 from . import edits, SCHEMA_VERSION, TARGET_TFM, cache
 from .buildtest import run_build_and_test
 from .compat import NuGetClient, _latest_stable
@@ -39,7 +40,7 @@ SDK_IMAGE = re.compile(r"(mcr\.microsoft\.com/dotnet/sdk):8\.0(?=[\s\"'@-]|$)", 
 
 
 def _progress(step: str) -> None:
-    print(f"[dmig {time.strftime('%H:%M:%S')}] {step}", file=sys.stderr, flush=True)
+    progress(step)
 
 
 class _AnyTagLoader(yaml.SafeLoader):

@@ -8,9 +8,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import yaml
@@ -18,7 +15,6 @@ import yaml
 from .catalog import PackageCatalog, tfm_supports
 from .preflight import iter_repo_files
 
-NUGET_FLAT = "https://api.nuget.org/v3-flatcontainer"
 
 
 def load_recipe(recipes_dir: Path, recipe_id: str = "dotnet-8-to-10") -> dict:
@@ -45,8 +41,8 @@ class NuGetClient(PackageCatalog):
     and machine configuration exactly as restore does, so organisation feeds, credential providers,
     proxies and certificates all apply, and nothing talks to the internet that restore would not.
     A package's supported frameworks are read from the local global packages folder first (the
-    baseline restored them), and from nuget.org only for packages that come from nuget.org.
-    Without a runner it falls back to the public nuget.org flat container (tests, old SDKs).
+    baseline restored them); otherwise it is unknown. There is no HTTP client here: without dotnet,
+    versions are unknown (METADATA_UNAVAILABLE), never fetched another way.
     """
 
     kind = "public-nuget"
@@ -57,7 +53,7 @@ class NuGetClient(PackageCatalog):
         self.sources: dict[str, list[str]] = {}  # package id (lower) -> feeds it was found on
         self.search_unavailable = False
         cache_dir.mkdir(parents=True, exist_ok=True)
-        self.source = "configured NuGet feeds via dotnet" if runner is not None else "nuget.org (HTTP)"
+        self.source = "configured NuGet feeds via dotnet" if runner is not None else "none (no dotnet)"
         self.query_dir = cache_dir / "query"
         if runner is not None:
             self.query_dir.mkdir(parents=True, exist_ok=True)
@@ -108,39 +104,14 @@ class NuGetClient(PackageCatalog):
         feeds = self.sources.get(package.lower())
         return bool(feeds) and not any("nuget.org" in f.lower() for f in feeds)
 
-    def _get(self, url: str, cache_name: str) -> str | None:
-        cache = self.cache_dir / cache_name
-        if cache.exists():
-            return cache.read_text(encoding="utf-8")
-        if not self.online:
-            self.failures.append({"url": url, "error": "offline mode"})
-            return None
-        last_error = None
-        for attempt in range(2):  # one retry: transient DNS failures are common
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "dmig/1.0"}),
-                                            timeout=20) as resp:
-                    text = resp.read().decode("utf-8", errors="replace")
-                cache.write_text(text, encoding="utf-8")
-                return text
-            except urllib.error.HTTPError as exc:
-                last_error = f"HTTP {exc.code}"
-                if exc.code == 404:
-                    break
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last_error = repr(getattr(exc, "reason", exc))
-            if attempt == 0:
-                time.sleep(3)
-        self.failures.append({"url": url, "error": last_error})
-        return None
-
     def versions(self, package: str) -> list[str] | None:
         if self.runner is not None and not self.search_unavailable:
             found = self._search(package)
             if found is not None or not self.search_unavailable:
                 return found
-        text = self._get(f"{NUGET_FLAT}/{package.lower()}/index.json", f"{package.lower()}.versions.json")
-        return json.loads(text)["versions"] if text else None
+        if self.runner is None:  # no HTTP client of its own: without dotnet, versions are unknown
+            self.failures.append({"package": package, "error": "METADATA_UNAVAILABLE: no dotnet to ask the configured feeds"})
+        return None
 
     # ---- PackageCatalog interface ----------------------------------------
     def list_versions(self, package: str) -> list[str] | None:
@@ -168,14 +139,11 @@ class NuGetClient(PackageCatalog):
         local = _global_packages() / pid / ver / f"{pid}.nuspec"
         if local.exists():
             return local.read_text(encoding="utf-8", errors="replace")
-        if self.is_internal(package):
-            return None
-        return self._get(f"{NUGET_FLAT}/{pid}/{ver}/{pid}.nuspec", f"{pid}.{ver}.nuspec")
+        return None  # not restored yet: unknown (the tool never downloads metadata itself)
 
     def dependency_tfms(self, package: str, version: str) -> list[str] | None:
         """Target frameworks the package's nuspec declares dependency groups for: from the local
-        global packages folder when restore already fetched it, else from nuget.org (public
-        packages only; a organisation-feed package without a local copy is simply unknown)."""
+        global packages folder when restore already fetched it; otherwise unknown."""
         text = self._nuspec(package, version)
         if text is None:
             return None
@@ -210,13 +178,14 @@ def package_findings(inventory: dict, recipe: dict, nuget: PackageCatalog) -> tu
             usage.setdefault((pkg["id"], pkg["version"] or "?"), []).append(p["id"])
     central = bool(inventory["central_package_files"])
     findings, strategies = [], []
-    restricted = getattr(nuget, "kind", "") == "fixture"   # an enterprise-mirror catalogue
+    restricted = getattr(nuget, "kind", "") == "local" and getattr(nuget, "configured", False)
     for (pid, version), projects in sorted(usage.items()):
         if restricted and version != "?":
             present = nuget.contains(pid)
-            if present is False:
-                findings.append(_catalog_finding("PKG-NOT-IN-CATALOGUE", pid, version, projects,
-                    f"{pid} is not in the configured package catalogue ({nuget.source}): restore will fail there.",
+            if present is False or (present and nuget.is_available(pid, version) is False):
+                findings.append(_catalog_finding("PACKAGE_UNAVAILABLE", pid, version, projects,
+                    f"{pid} {version} is not in the configured package catalogue ({nuget.source}): restore will fail there. "
+                    "No other source is used.",
                     "Stop, or use a recipe-approved alternative package; ask the catalogue owners to add it."))
             elif present and not nuget.is_approved(pid, version):
                 approved = nuget.newest_allowed(pid)
@@ -236,8 +205,8 @@ def package_findings(inventory: dict, recipe: dict, nuget: PackageCatalog) -> tu
             tfms = (nuget.get_metadata(pid, target) or {}).get("target_frameworks") if target else None
             both = nuget.get_compatibility(pid, target, "net8.0") if target else None
             if target is None:
-                strategy, why = "UNKNOWN", ("No approved 10.x version in the package catalogue, or the catalogue "
-                                            "was not reachable; the version for net10.0 must be confirmed.")
+                strategy, why = "UNKNOWN", ("No approved 10.x version in the package catalogue (or no catalogue "
+                                            "was given); the version for net10.0 must be confirmed.")
             elif both:
                 strategy, why = "ONE_VERSION_BOTH_TFMS", f"{pid} {target} declares assets for net8.0/netstandard as well as newer TFMs."
             else:
@@ -267,10 +236,10 @@ def package_findings(inventory: dict, recipe: dict, nuget: PackageCatalog) -> tu
 
 
 def _catalog_finding(rule_id: str, pid: str, version: str, projects: list[str], detail: str, action: str) -> dict:
-    return {"rule_id": rule_id, "title": detail.split(":")[0] if rule_id == "PKG-NOT-IN-CATALOGUE"
+    return {"rule_id": rule_id, "title": detail.split(":")[0] if rule_id == "PACKAGE_UNAVAILABLE"
             else f"{pid} {version} is not approved in the package catalogue",
             "kind": "package", "package": pid, "projects": projects, "evidence": f"{pid} {version}",
-            "effect": "build_break" if rule_id == "PKG-NOT-IN-CATALOGUE" else "decision",
+            "effect": "build_break" if rule_id == "PACKAGE_UNAVAILABLE" else "decision",
             "failure_class": "unavailable_package_version", "detail": detail,
             "repair": {"id": "catalogue-decision", "change_class": "PROJECT_LOCAL",
                        "action": action if action.startswith("Human review") else "Human review: " + action},

@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+from .console import progress
 from . import edits, SCHEMA_VERSION, TARGET_TFM
 from . import cache
 from .buildtest import SCOPE_FILTER, run_build_and_test, write_scope_filter
@@ -37,7 +38,7 @@ GLOBAL_NAMES = {"global.json", "directory.build.props", "directory.build.targets
 
 
 def _progress(step: str) -> None:
-    print(f"[dmig {time.strftime('%H:%M:%S')}] {step}", file=sys.stderr, flush=True)
+    progress(step)
 
 
 class GateFailure(Exception):
@@ -45,38 +46,55 @@ class GateFailure(Exception):
 
 
 # --------------------------------------------------------------------------- file edits
+CLEAR_TF = "<TargetFramework></TargetFramework>"
+EMPTY_TF_LINE = re.compile(r"[ \t]*<TargetFramework>\s*</TargetFramework>[ \t]*\r?\n?")
+
+
 def set_target_frameworks(path: Path, new_tfms: list[str]) -> dict:
     """Write the project's own TFM(s). Uses TargetFramework for one value, TargetFrameworks for
-    several, and clears an inherited singular TargetFramework (which would otherwise win)."""
-    text = path.read_text(encoding="utf-8")
+    several. Several values always come with an empty singular TargetFramework: a singular value
+    inherited from a shared file (e.g. Directory.Build.props) would otherwise win, and the project
+    would silently stay single-targeted (seen on a real repository). The empty element is harmless
+    where nothing is inherited, and it is kept on later edits."""
+    original = edits.read(path)
+    text = original
+    eol = "\r\n" if "\r\n" in text else "\n"
     value = ";".join(new_tfms)
     before = PROP_TFS.search(text) or PROP_TF.search(text)
     if len(new_tfms) == 1:
+        single = f"<TargetFramework>{value}</TargetFramework>"
         if PROP_TFS.search(text):
-            new = PROP_TFS.sub(f"<TargetFramework>{value}</TargetFramework>", text, count=1)
+            text = EMPTY_TF_LINE.sub("", text)  # the clearing element is no longer needed
+            new = PROP_TFS.sub(single, text, count=1)
         elif PROP_TF.search(text):
-            new = PROP_TF.sub(f"<TargetFramework>{value}</TargetFramework>", text, count=1)
+            new = PROP_TF.sub(single, text, count=1)
         else:
-            new = _insert_property(text, f"<TargetFramework>{value}</TargetFramework>")
+            new = _insert_property(text, single)
     else:
+        plural = f"<TargetFrameworks>{value}</TargetFrameworks>"
         if PROP_TFS.search(text):
-            new = PROP_TFS.sub(f"<TargetFrameworks>{value}</TargetFrameworks>", text, count=1)
-            new = PROP_TF.sub("", new)
+            new = PROP_TFS.sub(plural, text, count=1)
+            if PROP_TF.search(new):
+                new = PROP_TF.sub(CLEAR_TF, new)  # a local singular value would win: keep it, empty
+            else:
+                m = re.search(r"([ \t]*)<TargetFrameworks>", new)
+                new = new[:m.start()] + m.group(1) + CLEAR_TF + eol + new[m.start():]
         elif PROP_TF.search(text):
-            new = PROP_TF.sub(f"<TargetFrameworks>{value}</TargetFrameworks>", text, count=1)
+            m = re.search(r"([ \t]*)<TargetFramework>[^<]*</TargetFramework>", text)
+            new = text[:m.start()] + m.group(1) + CLEAR_TF + eol + m.group(1) + plural + text[m.end():]
         else:  # inherited from a shared file: clear the singular and set the plural locally
-            new = _insert_property(text, f"<TargetFramework></TargetFramework>\n    "
-                                         f"<TargetFrameworks>{value}</TargetFrameworks>")
-    edits.write_like(path, new, edits.read(path))
+            new = _insert_property(text, f"{CLEAR_TF}{eol}    {plural}")
+    edits.write_like(path, new, original)
     return {"before": before.group(1) if before else "(inherited)", "after": value}
 
 
 def _insert_property(text: str, xml: str) -> str:
+    eol = "\r\n" if "\r\n" in text else "\n"
     m = re.search(r"<PropertyGroup[^>]*>", text)
     if m:
-        return text[: m.end()] + "\n    " + xml + text[m.end():]
+        return text[: m.end()] + eol + "    " + xml + text[m.end():]
     m = re.search(r"<Project[^>]*>", text)
-    return text[: m.end()] + f"\n  <PropertyGroup>\n    {xml}\n  </PropertyGroup>" + text[m.end():]
+    return text[: m.end()] + f"{eol}  <PropertyGroup>{eol}    {xml}{eol}  </PropertyGroup>" + text[m.end():]
 
 
 def repair_cs14_field(worktree: Path, warnings: list[dict]) -> list[str]:
@@ -94,6 +112,68 @@ def repair_cs14_field(worktree: Path, warnings: list[dict]) -> list[str]:
         edits.write_like(path, "\n".join(src), edits.read(path))
         changed.append(rel)
     return changed
+
+
+RUNTIME_COUPLED = ("Microsoft.AspNetCore.",)  # versioned with the ASP.NET Core shared framework
+
+
+def runtime_coupled_target(package: str, catalog, preflight: dict | None) -> str | None:
+    """The 10.x version a runtime-coupled package should move to: the newest the configured catalogue
+    allows, else (no catalogue) the installed ASP.NET Core 10 runtime's own version, which these
+    packages are released with. None when neither is known."""
+    if catalog is not None:
+        return catalog.newest_allowed(package, 10)
+    asp = [r["version"] for r in (preflight or {}).get("runtimes", [])
+           if r.get("name") == "Microsoft.AspNetCore.App" and r["version"].split(".")[0] == "10" and "-" not in r["version"]]
+    return max(asp, key=lambda v: tuple(int(x) for x in v.split("."))) if asp else None
+
+
+def align_runtime_coupled(worktree: Path, project_rel: str, packages: list[dict], keeps_net8: bool,
+                          catalog, preflight: dict | None) -> tuple[list[dict], list[str]]:
+    """ASP.NET Core packages pinned to 8.x in the project file itself (e.g. Microsoft.AspNetCore.Mvc.Testing,
+    whose test host must match the runtime: 8.x on ASP.NET Core 10 answers HTTP 500 with "PipeWriter does
+    not implement UnflushedBytes"). Seen on a real repository; its maintainers made the same change.
+    net10.0-only project: the version moves to 10.x. Project that keeps net8.0: the reference is split by
+    target framework (8.x for net8.0, 10.x for net10.0). Central versions are global (PHASE_6): reported.
+    Returns (transformations, follow-ups)."""
+    path = worktree / project_rel
+    text = edits.read(path)
+    new, changes, notes = text, [], []
+    for pk in packages:
+        pid, ver = pk["id"], pk.get("version") or ""
+        if not pid.startswith(RUNTIME_COUPLED) or not ver.startswith("8."):
+            continue
+        if pk.get("version_source") != "project":
+            notes.append(f"{pid} {ver} ({pk.get('version_source')} version) must match the .NET 10 runtime once "
+                         f"{project_rel} runs on net10.0: align it in PHASE_6 or with a VersionOverride.")
+            continue
+        target = runtime_coupled_target(pid, catalog, preflight)
+        if not target:
+            notes.append(f"{pid} {ver}: no 10.x version is known (no catalogue entry, no ASP.NET Core 10 runtime); "
+                         f"align it by hand before running {project_rel} on net10.0.")
+            continue
+        pat = re.compile(r'([ \t]*)<PackageReference\s+Include="' + re.escape(pid) + r'"\s+Version="'
+                         + re.escape(ver) + r'"\s*/>', re.I)
+        m = pat.search(new)
+        if not m:
+            notes.append(f"{pid} {ver} in {project_rel}: the reference is not a one-line element; align it by hand.")
+            continue
+        indent = m.group(1)
+        eol = "\r\n" if "\r\n" in text else "\n"
+        if keeps_net8:
+            repl = (f'{indent}<PackageReference Include="{pid}" Version="{ver}" '
+                    f"Condition=\"'$(TargetFramework)' == 'net8.0'\" />{eol}"
+                    f'{indent}<PackageReference Include="{pid}" Version="{target}" '
+                    f"Condition=\"'$(TargetFramework)' == 'net10.0'\" />")
+        else:
+            repl = f'{indent}<PackageReference Include="{pid}" Version="{target}" />'
+        new = new[:m.start()] + repl + new[m.end():]
+        changes.append({"kind": "package_runtime_alignment", "file": project_rel, "change_class": "PROJECT_LOCAL",
+                        "package": pid, "before": ver, "after": target,
+                        "note": "split by target framework" if keeps_net8 else "net10.0 only"})
+    if new != text:
+        edits.write_like(path, new, text)
+    return changes, notes
 
 
 def repair_remove_package(worktree: Path, project_rel: str, package: str) -> list[str]:
@@ -250,7 +330,16 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
         # 3–4. recipe and applicability
         recipe = load_recipe(recipes_dir)
         # The catalogue the analysis used (a organisation mirror decides which versions are approved).
-        catalog = load_catalog(request.get("package_catalog"), out / "nuget-cache", online=False)             if request.get("package_catalog") not in (None, "public") else None
+        catalog = (load_catalog(request.get("package_catalog"), out / "nuget-cache")
+                   if request.get("package_catalog") not in (None, "public") else None)
+        if str(group.get("readiness", "")).startswith("OUT_OF_SCOPE"):
+            why = ("this group contains a report-only project type (.NET Framework, WPF, WinForms, MAUI, Xamarin, "
+                   "Azure Functions): the tool lists it and never migrates it; migrate it by hand"
+                   if group["readiness"] == "OUT_OF_SCOPE_REPORT_ONLY" else
+                   "this group contains a project type whose framework add-on is off (enable it with --adapters "
+                   "when analysing, or migrate it by hand)")
+            result["stop_reason"] = f"{group['readiness']}: {why}"
+            return finish("SKIPPED_NOT_APPLICABLE", unresolved_items=[result["stop_reason"]])
         is_shared = group["group_kind"] == "SHARED_FOUNDATION"
         applicable = [m for m in members if any(t.startswith("net8.0") for t in projects[m]["target_frameworks"])]
         if not applicable:
@@ -264,23 +353,50 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
                 return finish("BLOCKED_GLOBAL_PHASE_REQUIRED",
                               unresolved_items=["The repository selects SDK " + sdk + "; PHASE_1 must run first."])
 
-        # 6. target frameworks
+        # 6. target frameworks. A project that is still used by net8.0-only projects outside this group
+        #    (seen on a real repository: an API project referenced by a later group's tool and tests)
+        #    must keep net8.0 next to net10.0 until its last .NET 8 consumer moves, exactly like a
+        #    shared library; otherwise those consumers fail with NU1201.
+        net8_consumers = {}
+        for pid in applicable:
+            users = [c for c in graph.all_consumers(pid) if c not in members and c in projects
+                     and any(x.startswith("net8.0") for x in projects[c]["target_frameworks"])
+                     and not any(x.startswith("net10.0") for x in projects[c]["target_frameworks"])]
+            if users:
+                net8_consumers[pid] = sorted(users)
+        multi_targeted = []
         for pid in applicable:
             cur = projects[pid]["target_frameworks"]
-            if is_shared:
+            if is_shared or pid in net8_consumers:
+                multi_targeted.append(pid)
                 new = list(dict.fromkeys(t for x in cur for t in (x, x.replace("net8.0", "net10.0", 1) if x.startswith("net8.0") else x)))
             else:
                 new = [t.replace("net8.0", "net10.0", 1) if t.startswith("net8.0") else t for t in cur]
             change = set_target_frameworks(worktree / pid, new)
-            result["transformations"].append({"kind": "target_framework", "file": pid, "change_class": "PROJECT_LOCAL", **change})
+            result["transformations"].append({"kind": "target_framework", "file": pid, "change_class": "PROJECT_LOCAL", **change,
+                                              **({"kept_net8_for": net8_consumers[pid]} if pid in net8_consumers else {})})
+        for pid, users in net8_consumers.items():
+            result.setdefault("manual_follow_ups", []).append(
+                f"{pid} keeps net8.0 next to net10.0 for {len(users)} .NET 8 consumer(s) outside this group "
+                f"({', '.join(u.rsplit('/', 1)[-1] for u in users[:5])}); PHASE_5 removes it after they migrate. "
+                "If a Dockerfile or script publishes it, pass -f net10.0.")
 
         # 7. build tooling: nothing required for 8 -> 10 by this recipe
         result["transformations"].append({"kind": "build_tooling", "file": None, "change_class": None,
                                           "note": "No build-tool update is required by the dotnet-8-to-10 recipe."})
         # 8. packages: only migration-required ones (applied as repairs when the build proves them needed);
         #    framework-package alignment is PHASE_6 (global) and recorded, not applied.
+        #    Exception: ASP.NET Core packages pinned in the project file must match the runtime the
+        #    project now runs on (test hosts fail at run time otherwise), so they move with it.
         for p in applicable:
+            aligned, notes = align_runtime_coupled(worktree, p, projects[p]["packages"], p in multi_targeted,
+                                                   catalog, preflight)
+            result["transformations"] += aligned
+            result.setdefault("manual_follow_ups", []).extend(notes)
+            done = {a["package"] for a in aligned}
             for pk in projects[p]["packages"]:
+                if pk["id"] in done:
+                    continue
                 if any(pk["id"].startswith(x) for x in recipe["transformations"]["packages"]["coordinated_framework_prefixes"]):
                     result["excluded_work"].append(f"{pk['id']} {pk['version']} alignment deferred to PHASE_6 (repository-global)")
         # 9. Roslyn code fixes: none configured in the recipe
@@ -332,6 +448,19 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
                           next_action="final_gate" if ok else ("retry" if attempt < max_attempts else "rollback"))
             result["repair_attempts"].append(record)
 
+        # A run that stops without trying a repair (e.g. restore failed, runtime missing) still records
+        # why, so readers never meet an empty list.
+        missing_caps = missing_capabilities(current, probs)
+        if not result["repair_attempts"] and (probs["restore_failed"] or probs["new_errors"] or probs["regressions"]
+                                              or missing_caps):
+            reason = stop_reason(probs, missing_caps)
+            result["repair_attempts"].append({
+                "attempt": 0, "failures": _failure_summary(probs), "selected_rules": [], "unknown_failures": [],
+                "files_changed": [], "validation_result": "not_attempted", "next_action": "stop_for_human_review",
+                "stop_reason": reason})
+        if missing_caps:
+            result["missing_capabilities"] = missing_caps
+
         # 15–16. final gate (the scope filter is a tool file, never part of the change)
         (worktree / SCOPE_FILTER).unlink(missing_ok=True)
         changed = _changed_files(worktree, runner)
@@ -361,7 +490,8 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
                 review.append({"code": w["code"], "file": w["file"], "line": w["line"], "rule_id": rule["id"],
                                 "reference": rule.get("reference"), "message": w["message"][:200]})
         result["warnings_to_review"] = review[:50]
-        gate = _final_gate(group, changed, probs, current, inventory, allow_global, attempt, max_attempts, is_shared, new_inv)
+        gate = _final_gate(group, changed, probs, current, inventory, allow_global, attempt, max_attempts,
+                           is_shared, new_inv, multi_targeted)
         result["final_gate"] = gate
         if all(c["passed"] for c in gate):
             # The final state becomes the next group's cached baseline once a person applies the patch
@@ -385,6 +515,7 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
                                            for r in probs["baseline_failures_still_failing"]]
             return finish("SUCCESS")
         # 17. rollback: discard the worktree, return evidence but no patch
+        result["stop_reason"] = stop_reason(probs, missing_caps, gate)
         result["unresolved_items"] += [f"{c['check']}: {c['detail']}" for c in gate if not c["passed"]]
         result["rollback"]["performed"] = True
         return finish("ROLLED_BACK")
@@ -426,11 +557,48 @@ def _bt_summary(bt: dict) -> dict:
             "environment_blocked_projects": len(bt.get("environmental_blocks", []))}
 
 
+FEED_ERRORS = {"NU1301", "NU1101", "NU1102", "NU1103"}  # service index unreachable / package not on any feed
+
+
+def missing_capabilities(current: dict, probs: dict) -> list[str]:
+    """The machine prerequisites whose absence explains this run's failures."""
+    missing = []
+    codes = {e.get("code") for e in current.get("errors", [])}
+    if not current.get("restore_succeeded", True) and codes & FEED_ERRORS:
+        missing.append("reachable configured feed")
+    blocks = " ".join(b.get("detail", "") for b in current.get("environmental_blocks", []))
+    if "net8.0" in blocks or "Microsoft.NETCore.App 8" in blocks:
+        missing.append("runtime8")
+    if "Microsoft.AspNetCore.App 8" in blocks:
+        missing.append("aspnetcore_runtime8")
+    if "net10.0" in blocks or "Microsoft.NETCore.App 10" in blocks:
+        missing.append("runtime10")
+    return missing
+
+
+def stop_reason(probs: dict, missing: list[str], gate: list[dict] | None = None) -> str:
+    """One sentence: why the run stopped (the prerequisite first, when one is missing)."""
+    if missing:
+        return "missing prerequisite: " + ", ".join(missing) + " (environment, not the migration)"
+    if probs["restore_failed"]:
+        return "restore failed on .NET 10; see final_validation and the restore log"
+    if probs["new_errors"]:
+        e = probs["new_errors"][0]
+        return f"{len(probs['new_errors'])} new build error(s) without a recipe repair, first: {e['code']} {e.get('message', '')[:120]}"
+    if probs["regressions"]:
+        return f"{len(probs['regressions'])} test(s) that passed on .NET 8 fail on .NET 10, first: {probs['regressions'][0]['test']}"
+    failed = [c["check"] for c in (gate or []) if not c["passed"]]
+    return ("final gate failed: " + ", ".join(failed)) if failed else ""
+
+
 def _failure_summary(probs: dict) -> list[dict]:
     return ([{"failure_class": e["failure_class"], "code": e["code"], "file": e["file"], "line": e["line"],
               "baseline_status": "new"} for e in probs["new_errors"]]
             + [{"failure_class": "test_regression", "test": r["test"], "tfm": r.get("tfm"), "baseline_status": "new"}
                for r in probs["regressions"]])
+
+
+PRUNED_MESSAGE = re.compile(r"PackageReference (\S+) will not be pruned", re.I)
 
 
 def _select_repairs(worktree: Path, probs: dict, current: dict, rules: list[dict], recipe: dict,
@@ -447,8 +615,9 @@ def _select_repairs(worktree: Path, probs: dict, current: dict, rules: list[dict
                    if not catalog.is_approved(DOWNGRADE.search(e["message"]).group(1), DOWNGRADE.search(e["message"]).group(2))]
         for e in refused:
             m = DOWNGRADE.search(e["message"])
-            unknown.append({**_short(e), "reason": f"{m.group(1)} {m.group(2)} is not approved in the package catalogue: "
-                                                   "stop, do not choose another version"})
+            unknown.append({**_short(e), "reason": ("PACKAGE_UNAVAILABLE: " if not catalog.is_available(m.group(1), m.group(2))
+                                                    else "") + f"{m.group(1)} {m.group(2)} is not approved/available in "
+                                                   "the package catalogue: stop, do not choose another version or source"})
         downgrades = [e for e in downgrades if e not in refused]
     if downgrades:
         own_files = {pid for pid in projects}
@@ -469,6 +638,14 @@ def _select_repairs(worktree: Path, probs: dict, current: dict, rules: list[dict
             if hit:
                 rule, package = r, hit
                 break
+        if not rule and err["code"] == "NU1510":
+            # PKG-PRUNED-ANY: any other package the SDK names as unnecessary (seen on a real repository:
+            # Microsoft.AspNetCore.Http 2.2.2 in an ASP.NET Core app). The package comes from the message
+            # and must be referenced by the project itself.
+            m = PRUNED_MESSAGE.search(err.get("message", ""))
+            catch_all = next((r for r in rules if r["id"] == "PKG-PRUNED-ANY"), None)
+            if m and catch_all and m.group(1).lower() in refs:
+                rule, package = catch_all, refs[m.group(1).lower()]
         if rule:
             key = (rule["id"], proj["id"], package)
             if key not in chosen:
@@ -504,7 +681,8 @@ def _short(d: dict) -> dict:
 
 
 def _final_gate(group: dict, changed: list[str], probs: dict, current: dict, inventory: dict, allow_global: bool,
-                attempts: int, max_attempts: int, is_shared: bool, new_inv: dict) -> list[dict]:
+                attempts: int, max_attempts: int, is_shared: bool, new_inv: dict,
+                multi_targeted: list[str] | None = None) -> list[dict]:
     dirs = _project_dirs(group["project_ids"] + group["test_project_ids"])
     out_of_scope = [f for f in changed if not any(f.startswith(d) for d in dirs)]
     global_changed = [f for f in changed if _is_global(f, inventory)]
@@ -530,9 +708,10 @@ def _final_gate(group: dict, changed: list[str], probs: dict, current: dict, inv
         {"check": "dependent_tests_ran", "passed": not probs["not_run"],
          "detail": f"{len(probs['not_run'])} test(s) in scope did not run"},
     ]
-    if is_shared:
-        both = all(any(f"/{t}/" in b for b in built) for p in group["project_ids"]
-                   for t in projects[p]["target_frameworks"])
+    multi = [p for p in (multi_targeted or (group["project_ids"] if is_shared else [])) if p in projects]
+    if multi:
+        both = all(any(f"/{t}/" in b for b in built) for p in multi for t in projects[p]["target_frameworks"])
         checks.append({"check": "every_temporary_tfm_compiles", "passed": both,
-                       "detail": "net8.0 and net10.0 outputs found for every shared library" if both else "missing an output"})
+                       "detail": "net8.0 and net10.0 outputs found for every temporarily multi-targeted project"
+                       if both else "missing an output"})
     return checks

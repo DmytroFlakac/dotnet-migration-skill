@@ -118,7 +118,9 @@ def evaluate(path: Path, repo: Path, runner: Runner) -> dict:
 
 
 def _tfms(props: dict) -> list[str]:
-    value = props.get("TargetFrameworks") or props.get("TargetFramework") or ""
+    """The frameworks MSBuild really builds: a non-empty TargetFramework wins over TargetFrameworks
+    (the SDK then builds that single framework), e.g. one inherited from Directory.Build.props."""
+    value = props.get("TargetFramework") or props.get("TargetFrameworks") or ""
     return [t.strip() for t in value.split(";") if t.strip()]
 
 

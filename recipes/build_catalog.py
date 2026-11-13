@@ -34,7 +34,9 @@ STOP = {"PowerShell", "JavaScript", "NuGet", "MSBuild", "OpenApi", "OpenAPI", "W
         "GetHashCode", "IEnumerable", "ReadOnlySpan", "CancellationToken", "DateTime", "TimeSpan", "StringBuilder",
         "ArgumentNullException", "ArgumentOutOfRangeException", "InvalidOperationException", "ExecuteAsync",
         "SecretKey", "DuplicateHandle", "RuntimeHelpers"}
-CODE_TOKEN = re.compile(r"`([^`]+)`|\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+)(?:\.[A-Z]\w+)?\b")
+# \x60 is the backtick, written as an escape so a copy that loses or converts backticks (e.g. through a
+# Markdown viewer) cannot unbalance the parentheses.
+CODE_TOKEN = re.compile(r"\x60([^\x60]+)\x60|\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+)(?:\.[A-Z]\w+)?\b")
 
 
 def _slug(text: str) -> str:

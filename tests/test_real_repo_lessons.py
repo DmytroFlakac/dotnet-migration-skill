@@ -10,6 +10,7 @@ from dmig.buildtest import MISSING_FRAMEWORK
 from dmig.cli import _runner
 from dmig.experiment import compare_tests, compile_wall, package_wall, raise_downgrade_pins
 from dmig.globalphase import bump_msbuild_sdk_pins
+from conftest import dotnet_path, requires
 
 
 def _err(code, message="", file="", project="p.csproj"):
@@ -149,3 +150,115 @@ def test_inbox_package_kept_for_net8_silences_nu1510_only_there(tmp_path: Path):
     text = proj.read_bytes().decode()
     assert 'Version="8.0.5" Condition="$(TargetFramework.StartsWith(\'net8.0\'))" NoWarn="NU1510" />' in text
     assert "\r\n" in text and "\n" not in text.replace("\r\n", "")   # CRLF kept everywhere
+
+
+def test_aspnetcore_test_host_moves_with_the_project_to_net10(tmp_path):
+    """Real repository, group 13: Microsoft.AspNetCore.Mvc.Testing 8.0.10 on ASP.NET Core 10 made 56 tests
+    answer HTTP 500 ("PipeWriter does not implement UnflushedBytes"); the maintainers moved it to 10.x."""
+    from dmig.implement import align_runtime_coupled
+    proj = tmp_path / "Common.csproj"
+    proj.write_bytes(b'<Project Sdk="Microsoft.NET.Sdk">\r\n  <ItemGroup>\r\n'
+                     b'    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.10" />\r\n'
+                     b'    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />\r\n'
+                     b'  </ItemGroup>\r\n</Project>\r\n')
+    pkgs = [{"id": "Microsoft.AspNetCore.Mvc.Testing", "version": "8.0.10", "version_source": "project"},
+            {"id": "Microsoft.Extensions.Logging", "version": "8.0.0", "version_source": "project"},
+            {"id": "Microsoft.AspNetCore.TestHost", "version": "8.0.10", "version_source": "central"}]
+    pf = {"runtimes": [{"name": "Microsoft.AspNetCore.App", "version": "10.0.2"}]}
+    changes, notes = align_runtime_coupled(tmp_path, "Common.csproj", pkgs, False, None, pf)
+    assert [(c["package"], c["after"]) for c in changes] == [("Microsoft.AspNetCore.Mvc.Testing", "10.0.2")]
+    text = proj.read_bytes()
+    assert b'Mvc.Testing" Version="10.0.2"' in text and b'Logging" Version="8.0.0"' in text   # only the coupled one
+    assert text.count(b"\r\n") == 6                                                          # line endings kept
+    assert notes and "PHASE_6" in notes[0]                                                   # central: reported only
+    # A project that keeps net8.0 gets one reference per target framework.
+    proj.write_bytes(b'<Project>\n  <ItemGroup>\n    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" '
+                     b'Version="8.0.10" />\n  </ItemGroup>\n</Project>\n')
+    align_runtime_coupled(tmp_path, "Common.csproj", pkgs[:1], True, None, pf)
+    text = proj.read_text(encoding="utf-8")
+    assert "Version=\"8.0.10\" Condition=\"'$(TargetFramework)' == 'net8.0'\"" in text
+    assert "Version=\"10.0.2\" Condition=\"'$(TargetFramework)' == 'net10.0'\"" in text
+
+
+def test_any_package_the_sdk_calls_unnecessary_is_repaired(tmp_path):
+    """Real repository, app-sso: NU1510 for Microsoft.AspNetCore.Http 2.2.2 (not in PKG-INBOX-PRUNED's list)
+    stopped the run as 'unknown'; the catch-all rule PKG-PRUNED-ANY now removes the reference."""
+    from dmig.compat import load_recipe
+    from dmig.implement import _select_repairs
+    from conftest import ROOT
+    rules = load_recipe(ROOT / "recipes")["rules"]
+    proj = tmp_path / "Sso.csproj"
+    proj.write_text('<Project Sdk="Microsoft.NET.Sdk.Web">\n  <ItemGroup>\n'
+                    '    <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.2.2" />\n'
+                    '  </ItemGroup>\n</Project>\n', encoding="utf-8")
+    err = {"code": "NU1510", "file": "Sso.csproj", "line": None, "project": "Sso.csproj",
+           "failure_class": "package_restore_failure",
+           "message": "Warning As Error: PackageReference Microsoft.AspNetCore.Http will not be pruned. "
+                      "Consider removing this package from your dependencies, as it is likely unnecessary."}
+    inventory = {"projects": [{"id": "Sso.csproj", "packages": [{"id": "Microsoft.AspNetCore.Http", "version": "2.2.2"}],
+                               "target_frameworks": ["net10.0"]}]}
+    actions, unknown = _select_repairs(tmp_path, {"new_errors": [err], "regressions": []}, {}, rules, {}, inventory, None)
+    assert unknown == [] and [a["rule_id"] for a in actions] == ["PKG-PRUNED-ANY"]
+    actions[0]["apply"]()
+    assert "Microsoft.AspNetCore.Http" not in proj.read_text(encoding="utf-8")
+
+
+def _tf_cases(tmp_path):
+    from dmig.implement import set_target_frameworks
+    cases = {
+        "local singular": '<Project Sdk="Microsoft.NET.Sdk">\r\n  <PropertyGroup>\r\n    <TargetFramework>net8.0</TargetFramework>\r\n  </PropertyGroup>\r\n</Project>\r\n',
+        "inherited": '<Project Sdk="Microsoft.NET.Sdk">\r\n  <PropertyGroup>\r\n    <Nullable>enable</Nullable>\r\n  </PropertyGroup>\r\n</Project>\r\n',
+        "already multi": '<Project Sdk="Microsoft.NET.Sdk">\r\n  <PropertyGroup>\r\n    <TargetFramework></TargetFramework>\r\n    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>\r\n  </PropertyGroup>\r\n</Project>\r\n',
+    }
+    out = {}
+    for name, text in cases.items():
+        p = tmp_path / f"{name.replace(' ', '_')}.csproj"
+        p.write_bytes(text.encode())
+        set_target_frameworks(p, ["net8.0", "net10.0"])
+        out[name] = p
+    return out, set_target_frameworks
+
+
+def test_multi_targeting_always_clears_an_inherited_target_framework(tmp_path):
+    """Real repository: Directory.Build.props sets TargetFramework=net8.0. Projects switched to
+    TargetFrameworks without an empty TargetFramework stayed net8.0-only (the singular wins), and a
+    later run removed the empty element from others. Both are fixed; edits keep CRLF and leave no blank lines."""
+    out, set_tf = _tf_cases(tmp_path)
+    for name, p in out.items():
+        text = p.read_bytes().decode()
+        assert "<TargetFramework></TargetFramework>" in text, name
+        assert "<TargetFrameworks>net8.0;net10.0</TargetFrameworks>" in text, name
+        assert "\n" not in text.replace("\r\n", ""), name                      # CRLF kept
+        assert not [l for l in text.split("\r\n") if l.strip() == "" and l], name  # no whitespace-only line
+    # PHASE_5 later retires net8.0: back to one value, and the clearing element goes away.
+    p = out["already multi"]
+    set_tf(p, ["net10.0"])
+    text = p.read_bytes().decode()
+    assert "<TargetFramework>net10.0</TargetFramework>" in text and "TargetFrameworks" not in text
+    assert text.count("<TargetFramework>") == 1
+
+
+def test_inventory_reports_what_msbuild_builds():
+    """A non-empty TargetFramework wins over TargetFrameworks, exactly as in the SDK."""
+    from dmig.discovery import _tfms
+    assert _tfms({"TargetFramework": "net8.0", "TargetFrameworks": "net8.0;net10.0"}) == ["net8.0"]
+    assert _tfms({"TargetFramework": "", "TargetFrameworks": "net8.0;net10.0"}) == ["net8.0", "net10.0"]
+
+
+@requires("sdk10")
+def test_msbuild_really_multi_targets_after_the_edit(tmp_path):
+    """The same case evaluated by MSBuild itself: an inherited TargetFramework no longer wins."""
+    import json as _json
+    import subprocess as _sp
+    from dmig.implement import set_target_frameworks
+    (tmp_path / "Directory.Build.props").write_text(
+        "<Project>\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+        encoding="utf-8")
+    proj = tmp_path / "Lib.csproj"
+    proj.write_text('<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
+                    "  </PropertyGroup>\n</Project>\n", encoding="utf-8")
+    set_target_frameworks(proj, ["net8.0", "net10.0"])
+    r = _sp.run([dotnet_path(), "msbuild", str(proj), "-getProperty:TargetFramework", "-getProperty:TargetFrameworks"],
+                cwd=tmp_path, capture_output=True, text=True, timeout=300)
+    props = _json.loads(r.stdout[r.stdout.find("{"):])["Properties"]
+    assert props["TargetFramework"] == "" and props["TargetFrameworks"] == "net8.0;net10.0"

@@ -13,10 +13,10 @@ from dmig.dotnet import Runner
 from dmig.globalphase import run_global_phase
 from dmig.implement import repair_cs14_field, repair_remove_package, run_implementation, set_target_frameworks
 
-from conftest import dotnet_path
+from conftest import CATALOG, FULL, dotnet_path, requires
 
 GIT = ["git", "-c", "core.autocrlf=false", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
-needs_dotnet = pytest.mark.skipif(dotnet_path() is None, reason="dotnet not available")
+needs_dotnet = requires(*FULL)
 
 
 # ----------------------------------------------------------------------------- unit
@@ -25,7 +25,10 @@ def test_single_to_multi_target_uses_plural_element(tmp_path):
     f.write_text("<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>")
     set_target_frameworks(f, ["net8.0", "net10.0"])
     assert "<TargetFrameworks>net8.0;net10.0</TargetFrameworks>" in f.read_text()
-    assert "<TargetFramework>" not in f.read_text()
+    # The singular stays, empty: a value inherited from Directory.Build.props would otherwise win
+    # (real repository: projects silently stayed net8.0-only).
+    assert "<TargetFramework>net8.0</TargetFramework>" not in f.read_text()
+    assert "<TargetFramework></TargetFramework>" in f.read_text()
 
 
 def test_inherited_tfm_is_cleared_when_multi_targeting(tmp_path):
@@ -62,7 +65,8 @@ def test_package_removed_for_net10_only_and_conditioned_when_multi_targeted(tmp_
 # ----------------------------------------------------------------------------- integration
 def _analyze(repo: Path, out: Path) -> dict:
     run_analysis(repo, out, Runner(dotnet_path(), out / "logs"),
-                 {"run_baseline": True, "allow_reversible_experiments": True, "probe_network": True})
+                 {"run_baseline": True, "allow_reversible_experiments": True, "package_catalog": str(CATALOG),
+                  "adapters": ["aspnet_core"]})   # the sample's web app is migrated too
     return json.loads((out / "migration-plan.json").read_text(encoding="utf-8"))
 
 
@@ -104,7 +108,7 @@ def test_groups_migrate_in_order_and_patches_apply(sample_repo: Path, tmp_path: 
     assert early["status"] == "BLOCKED_DEPENDENCY_ORDER"
 
     expected_repairs = {"shared-foundation": [["SRC-CS14-FIELD"]], "app-appb-worker": [["PKG-LINQ-ASYNC"]],
-                        "app-appa-web": [], "component-legacyadmin": []}
+                        "app-appa-web": []}
     # PHASE_1 (repository-global, separately approved): CI moves to the SDK 10 image and keeps the
     # .NET 8 runtime while net8.0 targets remain; global.json already allows SDK 10.
     p1 = _global(sample_repo, tmp_path, plan, "PHASE_1_SDK_GLOBAL")
@@ -130,6 +134,17 @@ def test_groups_migrate_in_order_and_patches_apply(sample_repo: Path, tmp_path: 
         subprocess.run(["git", "apply", res["patch_path"]], cwd=sample_repo, check=True)
         subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qam",
                         f"{gid} migrated"], cwd=sample_repo, check=True)
+
+    # WinForms is report-only: listed, never migrated by the tool, no patch.
+    legacy = _implement(sample_repo, tmp_path / "component-legacyadmin", plan, "component-legacyadmin",
+                        allow_newer_commit=True)
+    assert legacy["status"] == "SKIPPED_NOT_APPLICABLE" and not legacy.get("patch_path")
+    assert legacy["stop_reason"].startswith("OUT_OF_SCOPE_REPORT_ONLY") and legacy["rollback"]["verified"]
+    # ... so a person migrates it by hand (here: the test), before .NET 8 is retired.
+    legacy_proj = sample_repo / "src/Tools/LegacyAdmin/LegacyAdmin.csproj"
+    legacy_proj.write_bytes(legacy_proj.read_bytes().replace(b"net8.0-windows", b"net10.0-windows"))
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qam",
+                    "LegacyAdmin migrated by hand"], cwd=sample_repo, check=True)
 
     # Baseline cache: the analysis baseline serves the first group; the first group's final state
     # (same tree after the patch is committed) serves the next group whose scope it covers.

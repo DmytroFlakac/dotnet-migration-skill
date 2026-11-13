@@ -49,7 +49,8 @@
         "BLOCKED_NOT_READY",
         "NOTHING_TO_DO",
         "VALIDATION_PASSED",
-        "VALIDATION_FAILED"
+        "VALIDATION_FAILED",
+        "BLOCKED_PLATFORM"
       ]
     },
     "target_framework": {
@@ -110,7 +111,7 @@
         "properties": {
           "attempt": {
             "type": "integer",
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 3
           },
           "failures": {
@@ -234,6 +235,18 @@
         "string",
         "null"
       ]
+    },
+    "stop_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "missing_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "phase": {
       "enum": [

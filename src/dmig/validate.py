@@ -3,7 +3,8 @@ repository (its projects, every project that consumes them, and their tests), in
 worktree, compared with the analysis baseline. Nothing is changed.
 
 `--scope repository` is the repository-wide validation (PHASE_7) in globalphase.py.
-A group that needs Windows on a machine without it is reported NOT_EXECUTED_PLATFORM_UNAVAILABLE: analysed, not validated, never "passed".
+A group that needs Windows on a machine without it is reported BLOCKED_PLATFORM: analysed, not
+validated, never "passed".
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ def validate_group(repo: Path, out: Path, runner: Runner, plan: dict, group_id: 
         result.update(status="REJECTED", unresolved_items=[f"unknown group {group_id}"])
         return result
     if group.get("platform") == "WINDOWS" and platform.system() != "Windows":
-        result.update(status="NOT_EXECUTED_PLATFORM_UNAVAILABLE",
+        result.update(status="BLOCKED_PLATFORM",
                       unresolved_items=["this group needs Windows to build and test; analysed but not validated"])
         return result
     before = snapshot(repo, runner)

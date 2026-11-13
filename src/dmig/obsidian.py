@@ -28,11 +28,11 @@ from . import limits
 from .report import PLAIN, RAG
 
 CALLOUT = {"READY": "success", "WAITS_FOR_DEPENDENCY_REPAIR": "info", "NEEDS_KNOWN_REPAIR": "warning",
-           "NEEDS_HUMAN_REVIEW": "warning", "VALIDATION_REQUIRES_WINDOWS": "warning",
+           "NEEDS_HUMAN_REVIEW": "warning", "BLOCKED_PLATFORM": "warning",
            "BLOCKED_NEEDS_INVESTIGATION": "danger", "NOT_VERIFIED_NO_EXPERIMENT": "question",
            "NOT_VERIFIED_NO_BASELINE": "question"}
 CANVAS_COLOR = {"READY": "green", "WAITS_FOR_DEPENDENCY_REPAIR": "cyan", "NEEDS_KNOWN_REPAIR": "yellow",
-                "NEEDS_HUMAN_REVIEW": "orange", "VALIDATION_REQUIRES_WINDOWS": "orange",
+                "NEEDS_HUMAN_REVIEW": "orange", "BLOCKED_PLATFORM": "orange",
                 "BLOCKED_NEEDS_INVESTIGATION": "red"}
 PHASE_LABEL = {
     "PHASE_0_ANALYSIS": "Analyse the repository",
@@ -264,7 +264,7 @@ def export(out: Path, repo: Path, response: dict, preflight: dict, inventory: di
     regressions = sum(len(i["tests"]) for i in items)
     counts = response["summary"]["readiness_counts"]
     worst = next((r for r in ("BLOCKED_NEEDS_INVESTIGATION", "NEEDS_HUMAN_REVIEW", "NEEDS_KNOWN_REPAIR",
-                              "VALIDATION_REQUIRES_WINDOWS", "WAITS_FOR_DEPENDENCY_REPAIR") if r in counts), "READY")
+                              "BLOCKED_PLATFORM", "WAITS_FOR_DEPENDENCY_REPAIR") if r in counts), "READY")
     rule_note = lambda it: n.rule(it["key"])  # noqa: E731
     dec_index = {d["key"]: i + 1 for i, d in enumerate(decisions)}
 

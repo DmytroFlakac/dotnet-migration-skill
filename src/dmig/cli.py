@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from .console import install, say
 from .dotnet import Runner
 
 
@@ -18,6 +19,23 @@ def _load_json(path: str | None) -> dict | None:
     return json.loads(Path(path).read_text(encoding="utf-8")) if path else None
 
 
+def _load_request(path: str | None) -> dict | None:
+    """A request file in the contract's camelCase shape (or the older snake_case one)."""
+    from .contract import normalize_request
+    data = _load_json(path)
+    return normalize_request(data) if data is not None else None
+
+
+def _deliver(out: Path, result: dict) -> None:
+    """IDelivery (mock: LocalFileDelivery): migration.patch (when there is one) + migration-report.md
+    in the run's output folder. The composition root chooses the adapter; the core never calls it."""
+    from .adapters import LocalFileDelivery, MockWorkItemAdapter
+    what = result.get("group_id") or result.get("phase") or "run"
+    ticket = MockWorkItemAdapter().ticket_for(f"Migrate {what} to .NET 10")
+    patch = Path(result["patch_path"]) if result.get("patch_path") else None
+    LocalFileDelivery(out).deliver(patch, result, ticket, f"dotnet10 {what}")
+
+
 def _note_budget(runner: Runner, result_file: Path, result: dict) -> int | None:
     """When the time budget ran out, say so in the result (the step has already failed safely)."""
     if not runner.budget_exhausted:
@@ -27,7 +45,7 @@ def _note_budget(runner: Runner, result_file: Path, result: dict) -> int | None:
     result["ready_for_human_review"] = False
     if result_file.exists():
         _write(result_file, result)
-    print(note, file=sys.stderr)
+    say(note, err=True)
     return 4
 
 
@@ -70,15 +88,17 @@ def cmd_preflight(args) -> int:
 def cmd_doctor(args) -> int:
     from .doctor import run_doctor
     repo, out = Path(args.repo).resolve(), Path(args.out).resolve()
-    report = run_doctor(repo, out, Runner(args.dotnet, out / "logs"))
-    print((out / "doctor-report.md").read_text(encoding="utf-8"))
+    report = run_doctor(repo, out, Runner(args.dotnet, out / "logs"), allow_network=bool(args.allow_public_nuget),
+                        catalog_spec=_catalog_spec(args), probe_feeds=not args.offline,
+                        dotnet_info=getattr(args, "dotnet_info", None))
+    say((out / "doctor-report.md").read_text(encoding="utf-8"))
     return 0 if report["ready"] else 1
 
 
 def cmd_analyze(args) -> int:
     from .analysis import run_analysis
     repo, out = Path(args.repo).resolve(), Path(args.out).resolve()
-    request = _load_json(args.request) or {}
+    request = _load_request(args.request) or {}
     request.setdefault("repository_path", str(repo))
     request.setdefault("mode", "analysis")
     request.setdefault("target_framework", "net10.0")
@@ -87,7 +107,9 @@ def cmd_analyze(args) -> int:
     request["run_baseline"] = not args.no_baseline
     if args.obsidian_dir:
         request["obsidian_dir"] = str(Path(args.obsidian_dir).resolve())
-    request["probe_network"] = not args.offline
+    request["allow_public_nuget"] = bool(args.allow_public_nuget) or bool(request.get("allowPublicNuget"))
+    request["probe_feeds"] = not args.offline
+    request.setdefault("adapters", args.adapters)
     request["package_catalog"] = _catalog_spec(args)
     runner = Runner(args.dotnet, out / "logs")
     runner.set_budget(args.max_minutes)
@@ -101,7 +123,8 @@ def cmd_analyze(args) -> int:
 def cmd_report(args) -> int:
     from .analysis import rerender
     repo, out = Path(args.repo).resolve(), Path(args.out).resolve()
-    request = {"probe_network": not args.offline, "package_catalog": _catalog_spec(args, Path(args.out).resolve())}
+    request = {"allow_public_nuget": bool(args.allow_public_nuget), "probe_feeds": not args.offline, "adapters": args.adapters,
+               "package_catalog": _catalog_spec(args, Path(args.out).resolve())}
     if args.obsidian_dir:
         request["obsidian_dir"] = str(Path(args.obsidian_dir).resolve())
     response = rerender(repo, out, request)
@@ -118,7 +141,7 @@ def cmd_implement(args) -> int:
     preflight_path = plan_path.parent / "preflight.json"
     preflight = json.loads(preflight_path.read_text(encoding="utf-8")) if preflight_path.exists() else None
     group = next((g for g in plan["groups"] if g["group_id"] == args.group), None)
-    request = _load_json(args.request) or (dict(group["implementation_request"]) if group else {})
+    request = _load_request(args.request) or (dict(group["implementation_request"]) if group else {})
     request.setdefault("selected_group_id", args.group)
     request["selected_group_id"] = args.group
     request["max_repair_attempts"] = min(int(request.get("max_repair_attempts", 3)), 3)
@@ -137,6 +160,7 @@ def cmd_implement(args) -> int:
     result = run_implementation(repo, out, runner, plan, request, RECIPES, preflight)
     budget = _note_budget(runner, out / "result.json", result)
     from .contract import write_contract
+    _deliver(out, result)
     write_contract(out, result, plan_path, mode="implementation")
     print(json.dumps({k: result.get(k) for k in ("status", "group_id", "patch_path", "files_changed",
                                                  "changes_persisted", "unresolved_items")}, indent=2))
@@ -159,11 +183,13 @@ def cmd_global(args) -> int:
                "original_inventory": json.loads((plan_path.parent / "inventory.json").read_text(encoding="utf-8"))
                if (plan_path.parent / "inventory.json").exists() else None}
     runner = _runner(args.dotnet, out / "logs", preflight)
-    nuget = load_catalog(_catalog_spec(args, plan_path.parent), plan_path.parent / "nuget-cache", runner=runner, repo=repo)
+    nuget = load_catalog(_catalog_spec(args, plan_path.parent), plan_path.parent / "nuget-cache",
+                         allow_network=bool(args.allow_public_nuget), runner=runner, repo=repo)
     runner.set_budget(args.max_minutes)
     result = run_global_phase(repo, out, runner, plan, args.phase, request, preflight, nuget)
     budget = _note_budget(runner, out / "result.json", result)
     from .contract import write_contract
+    _deliver(out, result)
     write_contract(out, result, plan_path,
                    mode="validation" if args.phase == "PHASE_7_REPO_VALIDATION" else "implementation")
     print(json.dumps({k: result.get(k) for k in ("status", "phase", "patch_path", "files_changed",
@@ -190,6 +216,7 @@ def cmd_validate(args) -> int:
     runner.set_budget(args.max_minutes)
     result = validate_group(repo, out, runner, plan, args.group, preflight, reference)
     _write(out / "result.json", result)
+    _deliver(out, result)
     write_contract(out, result, plan_path, mode="validation")
     budget = _note_budget(runner, out / "result.json", result)
     print(json.dumps({k: result.get(k) for k in ("status", "group_id", "unresolved_items")}, indent=2))
@@ -212,11 +239,18 @@ CATALOG_HELP = ("package catalogue: a fixture JSON emulating the organisation mi
 
 
 def _workspace(repo: Path) -> Path:
-    """Default home for every output: <parent>/<repo name>.dmig/ (always outside the repository)."""
+    """Default home for every output: <parent>/<repo name>.dmig/ (always outside the repository).
+    A repository inside the tool's own folder (the samples) gets a folder in the temp directory
+    instead, so the tool's files are never written into."""
+    tool = Path(__file__).resolve().parents[2]
+    if repo.resolve().is_relative_to(tool):
+        import tempfile
+        return Path(tempfile.gettempdir()) / "dmig" / f"{repo.name}.dmig"
     return repo.parent / f"{repo.name}.dmig"
 
 
 def main(argv: list[str] | None = None) -> int:
+    install()  # a cp1252 console must never crash the tool
     parser = argparse.ArgumentParser(
         prog="dmig", description="Analysis-first .NET 8 -> .NET 10 migration for monorepos. Typical order: "
         "doctor, analyze, global PHASE_1, migrate (each group), global PHASE_5/6, validate --scope repository, "
@@ -231,6 +265,16 @@ def main(argv: list[str] | None = None) -> int:
         c.add_argument("--repo", help=argparse.SUPPRESS)
         c.add_argument("--out", help="output folder, outside the repository (default: <repo>.dmig/<step>)")
         c.add_argument("--dotnet", help="dotnet executable (default: $DMIG_DOTNET or PATH)")
+        c.add_argument("--dotnet-root", action="append", default=[], metavar="FOLDER",
+                       help="another dotnet installation folder to take runtimes from (e.g. one with .NET 8); "
+                            "repeatable; also $DMIG_DOTNET_ROOTS. Known install folders are searched anyway.")
+        c.add_argument("--allow-public-nuget", dest="allow_public_nuget", action="store_true",
+                       help="allow the public nuget.org catalogue (--package-catalog public); off by default. Without "
+                            "it, versions not in a local catalogue are METADATA_UNAVAILABLE. dotnet restore/build "
+                            "always use the configured feeds.")
+        c.add_argument("--allow-network", dest="allow_public_nuget", action="store_true", help=argparse.SUPPRESS)
+        c.add_argument("--offline", action="store_true",
+                       help="do not probe the configured package feeds (they are probed by default)")
         if plan:
             c.add_argument("--plan", help="migration-plan.json from the analysis (default: <repo>.dmig/analysis/)")
         if budget:
@@ -239,22 +283,23 @@ def main(argv: list[str] | None = None) -> int:
             c.add_argument("--package-catalog", help=CATALOG_HELP)
         return c
 
-    d = command("doctor", "is this machine and repository ready? a plain-language checklist with fixes (run first)")
+    d = command("doctor", "is this machine and repository ready? a plain-language checklist with fixes (run first)",
+                catalog=True)
     pf = command("preflight", "the environment check as JSON (doctor's machine-readable core)")
     for c in (pf,):
         c.add_argument("--environment", help="environment contract JSON (services, licensed tools)")
-        c.add_argument("--offline", action="store_true", help="do not probe package feeds")
     a = command("analyze", "analyse the whole repository; changes nothing", budget=True, catalog=True)
     a.add_argument("--target", default="net10.0", choices=["net10.0"], help="target framework (net10.0)")
     a.add_argument("--environment", help="environment contract JSON (services, licensed tools)")
-    a.add_argument("--offline", action="store_true", help="do not probe package feeds")
+    a.add_argument("--adapters", default="", help="framework add-ons to include (comma list): aspnet_core, efcore, "
+                                                  "windows_service; default none (WPF/WinForms are report-only)")
     a.add_argument("--request", help="neutral request JSON")
     a.add_argument("--no-baseline", action="store_true", help="skip restore/build/test")
     a.add_argument("--no-experiment", action="store_true", help="skip the net10.0 experiment")
     a.add_argument("--obsidian-dir", help="also write the Obsidian notes into this folder (default: <out>/obsidian)")
     r = command("report", "re-render plan, report and notes from an existing analysis (no builds)", catalog=True)
     r.add_argument("--obsidian-dir", help="write the notes into this folder (e.g. inside a vault)")
-    r.add_argument("--offline", action="store_true", help="use only cached package metadata")
+    r.add_argument("--adapters", default=None, help="framework add-ons (default: those the analysis used)")
     for name, text in (("migrate", "migrate ONE approved group in a disposable worktree; returns a patch"),
                        ("implement", "same as migrate (older name)")):
         m = command(name, text, plan=True, budget=True, catalog=True)
@@ -297,10 +342,24 @@ def main(argv: list[str] | None = None) -> int:
             args.plan = str(Path(args.plan).resolve()) if args.plan else str(ws / "analysis" / "migration-plan.json")
         if Path(args.out).is_relative_to(Path(args.repo)):
             parser.error("--out must be outside the repository")
+    # Several .NET installations side by side: use the runtimes of all of them (dotnet_roots.py).
+    from .dotnet_roots import resolve
+    args.dotnet, args.dotnet_info = resolve(getattr(args, "dotnet", None), getattr(args, "dotnet_root", []))
+    if args.dotnet_info.get("combined"):
+        say(f"[dmig] runtime(s) {', '.join(args.dotnet_info['found_in'])} found in other dotnet folder(s): using a "
+            f"combined root {args.dotnet_info['combined']} (nothing installed or changed)", err=True)
     handlers = {"preflight": cmd_preflight, "analyze": cmd_analyze, "report": cmd_report, "doctor": cmd_doctor,
                 "implement": cmd_implement, "migrate": cmd_implement, "global": cmd_global,
                 "validate": cmd_validate, "rollback": cmd_rollback}
-    return handlers[args.command](args)
+    # Telemetry goes through the adapter interface (mock: <out>/telemetry.jsonl, redacted).
+    from .adapters import defaults  # the composition root: the only place that picks concrete adapters
+    out_dir = Path(args.run if args.command == "rollback" else args.out)
+    telemetry = defaults(out_dir)["telemetry"]  # ITelemetry; the mock writes <out>/telemetry.jsonl
+    telemetry.event("command_started", command=args.command, group=getattr(args, "group", None),
+                    phase=getattr(args, "phase", None), public_nuget_allowed=bool(getattr(args, "allow_public_nuget", False)))
+    code = handlers[args.command](args)
+    telemetry.event("command_finished", command=args.command, exit_code=code)
+    return code
 
 
 if __name__ == "__main__":

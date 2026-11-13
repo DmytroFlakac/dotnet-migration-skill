@@ -176,10 +176,12 @@
               "NEEDS_KNOWN_REPAIR",
               "WAITS_FOR_DEPENDENCY_REPAIR",
               "NEEDS_HUMAN_REVIEW",
-              "VALIDATION_REQUIRES_WINDOWS",
+              "BLOCKED_PLATFORM",
               "BLOCKED_NEEDS_INVESTIGATION",
               "NOT_VERIFIED_NO_EXPERIMENT",
-              "NOT_VERIFIED_NO_BASELINE"
+              "NOT_VERIFIED_NO_BASELINE",
+              "OUT_OF_SCOPE_ADAPTER_DISABLED",
+              "OUT_OF_SCOPE_REPORT_ONLY"
             ]
           },
           "proposed_changes": {

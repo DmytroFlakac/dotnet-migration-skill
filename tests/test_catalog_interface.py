@@ -8,7 +8,7 @@ from dmig.compat import load_recipe, package_findings
 
 from conftest import ROOT
 
-FIXTURE = ROOT / "samples" / "package-catalog.fixture.json"
+FIXTURE = ROOT / "fixtures" / "package-catalog.json"
 
 
 def test_fixture_catalog_answers_the_contract_questions():
@@ -31,9 +31,10 @@ def test_tfm_support_from_declared_frameworks():
 
 
 def test_load_catalog_chooses_by_spec(tmp_path: Path):
-    assert load_catalog(str(FIXTURE), tmp_path).kind == "fixture"
-    assert load_catalog(None, tmp_path, online=False).kind == "public-nuget"
-    assert isinstance(load_catalog("public", tmp_path, online=False), PackageCatalog)
+    assert load_catalog(str(FIXTURE), tmp_path).kind == "local"
+    assert load_catalog(None, tmp_path).kind == "local"                       # offline by default
+    assert load_catalog("public", tmp_path, allow_network=True).kind == "public-nuget"
+    assert isinstance(load_catalog("public", tmp_path), PackageCatalog)
 
 
 def _inventory(packages: list[tuple[str, str]]) -> dict:
@@ -44,11 +45,12 @@ def _inventory(packages: list[tuple[str, str]]) -> dict:
 def test_findings_use_only_approved_versions_and_report_missing_packages():
     recipe = load_recipe(ROOT / "recipes")
     inv = _inventory([("Microsoft.Extensions.Hosting", "8.0.1"), ("System.Linq.Async", "6.0.1"),
-                      ("xunit", "2.9.2")])
+                      ("xunit", "2.9.2"), ("Microsoft.Extensions.Hosting", "10.0.3")])
     findings, strategies = package_findings(inv, recipe, FixturePackageCatalog(FIXTURE))
     ids = {(f["rule_id"], f["package"]) for f in findings if f.get("package")}
-    assert ("PKG-NOT-IN-CATALOGUE", "System.Linq.Async") in ids          # public, but not mirrored
-    assert ("PKG-VERSION-NOT-APPROVED", "xunit") in ids                  # 2.9.2 is not the approved 2.9.3
+    assert ("PACKAGE_UNAVAILABLE", "System.Linq.Async") in ids          # public, but not mirrored
+    assert ("PACKAGE_UNAVAILABLE", "xunit") in ids                       # 2.9.2 is not in the mirror (only 2.9.3)
+    assert ("PKG-VERSION-NOT-APPROVED", "Microsoft.Extensions.Hosting") in ids   # 10.0.3 mirrored, not approved
     hosting = next(s for s in strategies if s["package"] == "Microsoft.Extensions.Hosting")
     assert hosting["net10_version"] == "10.0.0" and hosting["strategy"] == "ONE_VERSION_BOTH_TFMS"
 

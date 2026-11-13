@@ -36,15 +36,20 @@ anyone changes real code. Implementation happens later, one approved group at a 
    logs, NuGet metadata cache and the temporary worktree all go there.
 2. **Choose the dotnet.** The tool checks SDKs and runtimes itself in its preflight; you only
    need to point it at the right executable. If the machine has a private dotnet root (SDK 10 +
-   runtime 8 side by side), pass it with `--dotnet` or `DMIG_DOTNET`.
-3. **Install the one dependency** if missing: `pip install pyyaml jsonschema`.
+   runtime 8 side by side), pass it with `--dotnet` or `DMIG_DOTNET`. When .NET 8 is installed in
+   another dotnet folder, the tool finds it in the usual places, or take it from
+   `--dotnet-root <folder>` / `DMIG_DOTNET_ROOTS`, and combines it with the SDK through links in a
+   folder of its own (no installation is changed).
+3. **Install the two libraries** if missing, from the organisation's Python mirror:
+   `python -m pip install -r requirements.txt` (tests: also `requirements-dev.txt`). Always use
+   `python -m ...`: the Scripts folder may not be on PATH. No `sh`, `bash` or `sed` is needed.
 4. **Run the analysis** (Windows paths work in `PYTHONPATH`, `--repo` and `--out`, also from Git Bash):
 
    ```bash
    PYTHONPATH=<skill-dir>/scripts python -m dmig analyze --repo <repo> --out <out-dir> [--dotnet <path>]
    ```
 
-   Useful flags: `--offline` (no feed probes or NuGet lookups), `--no-baseline`, `--no-experiment`,
+   Useful flags: `--offline` (do not probe the configured feeds), `--no-baseline`, `--no-experiment`,
    `--environment contract.json` (external test services and licensed tools the environment
    provides), `--request request.json` (the neutral request, see `references/contracts.md`).
    Expect roughly a minute for a small repository; large monorepos take as long as their own
@@ -67,6 +72,17 @@ anyone changes real code. Implementation happens later, one approved group at a 
    throwaway copy and prints how to undo its patch). Each migrate/global/validate run also writes
    `dmig-result.json`, the contract's camelCase result. Package mirror:
    `--package-catalog mirror.json` (only approved versions are ever chosen; later steps reuse it).
+
+   **Defaults to respect:** the tool has **no network client of its own**: everything about packages
+   goes through `dotnet` and the feeds configured on the machine, which are probed by default
+   (`--offline` skips that). The public catalogue only with `--allow-public-nuget`; without a catalogue
+   file, package versions are `METADATA_UNAVAILABLE` (never guessed), and a package missing from the
+   catalogue is `PACKAGE_UNAVAILABLE`. **Framework add-ons are off:** web (ASP.NET Core), EF Core
+   rules and Windows services need `--adapters aspnet_core,efcore,windows_service` at analysis time;
+   otherwise their groups are `OUT_OF_SCOPE_ADAPTER_DISABLED`. .NET Framework, WPF, WinForms, MAUI,
+   Xamarin and Azure Functions are report-only (`OUT_OF_SCOPE_REPORT_ONLY`); `net*-windows` groups
+   without Windows are `BLOCKED_PLATFORM`. Console output is plain ASCII (PASS/WARN/FAIL/BLOCK). Inputs,
+   outputs, statuses and exit codes: `docs/integration-contract.md`.
 
 5. **Exit codes:** 0 = analysis complete (possibly with limitations), 2 = BLOCKED.
 

@@ -108,13 +108,21 @@ def build_plan(inventory: dict, grouping: dict, tests: list[dict], compat: dict,
         elif human:
             readiness = "NEEDS_HUMAN_REVIEW"
         elif g["platform"] == "WINDOWS" and not host_windows:
-            readiness = "VALIDATION_REQUIRES_WINDOWS"
+            readiness = "BLOCKED_PLATFORM"
         elif not experiment_ok or not all(proj_name[p] in exp_built for p in g["project_ids"] + g["test_project_ids"]):
             readiness = "NOT_VERIFIED_NO_EXPERIMENT"
         elif not baseline_ok:
             readiness = "NOT_VERIFIED_NO_BASELINE"
         else:
             readiness = "READY"
+        # Scope wins over everything: a group with a project of a disabled framework add-on (or a
+        # report-only type) is listed, never migrated.
+        scopes = {next((p.get("scope", "IN_SCOPE") for p in inventory["projects"] if p["id"] == m), "IN_SCOPE")
+                  for m in g["project_ids"]}
+        if "OUT_OF_SCOPE_REPORT_ONLY" in scopes:
+            readiness = "OUT_OF_SCOPE_REPORT_ONLY"
+        elif "OUT_OF_SCOPE_ADAPTER_DISABLED" in scopes:
+            readiness = "OUT_OF_SCOPE_ADAPTER_DISABLED"
         proposed = _proposed_changes(g, inventory, g_findings, grouping)
         phase = "MULTITARGET_SHARED" if g["group_kind"] == "SHARED_FOUNDATION" else "GROUP_MIGRATION"
         groups.append({
@@ -161,7 +169,7 @@ def build_plan(inventory: dict, grouping: dict, tests: list[dict], compat: dict,
         uncertainties.append({"code": "NUGET_LOOKUP_FAILED", "affects": "package strategies",
                               "detail": f"{len(fails)} NuGet metadata lookup(s) failed after a retry "
                                         f"(first: {fails[0]['error']}); affected versions are reported as unknown. "
-                                        "Rerun the analysis when nuget.org is reachable."})
+                                        "Rerun the analysis when the configured package feed is reachable."})
     if baseline is None:
         uncertainties.append({"code": "NO_BASELINE", "affects": "all groups",
                               "detail": "No baseline: failures cannot be separated into pre-existing and migration-caused."})

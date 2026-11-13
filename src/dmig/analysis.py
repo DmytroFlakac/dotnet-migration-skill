@@ -7,9 +7,10 @@ import sys
 import time
 from pathlib import Path
 
+from .console import progress
 from . import SCHEMA_VERSION, SOURCE_TFM, TARGET_TFM
 from .buildtest import run_build_and_test
-from .catalog import load_catalog
+from .catalog import load_catalog, public_nuget_allowed
 from .compat import load_recipe, run_compatibility
 from .discovery import run_inventory
 from .dotnet import Runner
@@ -50,8 +51,7 @@ def validate_outputs(out: Path) -> list[str]:
 
 
 def _progress(step: str) -> None:
-    """One line per step on stderr, so a background run can be followed; stdout stays JSON."""
-    print(f"[dmig {time.strftime('%H:%M:%S')}] {step}", file=sys.stderr, flush=True)
+    progress(step)
 
 
 def _sdk_probe(repo: Path, out: Path, runner: Runner, preflight: dict, start_state: dict | None) -> dict | None:
@@ -129,7 +129,7 @@ def run_analysis(repo: Path, out: Path, runner: Runner, request: dict,
     out.mkdir(parents=True, exist_ok=True)
     # A0 – environment preflight (mandatory)
     _progress("preflight")
-    preflight = run_preflight(repo, out, runner, probe_network=request.get("probe_network", True),
+    preflight = run_preflight(repo, out, runner, probe_network=request.get("probe_feeds", True),
                               environment_contract=environment_contract)
     _write(out, "preflight.json", preflight)
     caps = preflight["capabilities"]
@@ -156,6 +156,10 @@ def run_analysis(repo: Path, out: Path, runner: Runner, request: dict,
     _progress("inventory + MSBuild evaluation")
     inventory = run_inventory(eval_root, runner, (start_state or {}).get("commit"),
                               evaluate_msbuild=caps["can_evaluate_msbuild"])
+    from . import scope as scope_mod
+    adapters = scope_mod.parse(request.get("adapters"))
+    inventory["adapters_enabled"] = sorted(adapters)
+    inventory["out_of_scope_projects"] = scope_mod.annotate(inventory, adapters)
     sol_of = {}
     for s in inventory["solutions"]:
         for pid in s["projects"]:
@@ -221,8 +225,8 @@ def run_analysis(repo: Path, out: Path, runner: Runner, request: dict,
 
     # A8 – compatibility
     _progress("compatibility rules + NuGet metadata")
-    recipe = load_recipe(RECIPES)
-    nuget = load_catalog(request.get("package_catalog"), out / "nuget-cache", online=request.get("probe_network", True),
+    recipe = scoped_recipe(load_recipe(RECIPES), set(inventory.get("adapters_enabled", [])))
+    nuget = load_catalog(request.get("package_catalog"), out / "nuget-cache", allow_network=public_nuget_allowed(request),
                          runner=runner, repo=repo)
     compat = run_compatibility(repo, inventory, recipe, nuget, preflight["selected_sdk_in_repository"])
     _write(out, "compatibility.json", compat)
@@ -241,6 +245,17 @@ def run_analysis(repo: Path, out: Path, runner: Runner, request: dict,
     rollback_verified = unchanged and (experiment is None or experiment.get("rollback_verified", False))
     return _finish(repo, out, request, preflight, inventory, grouping, tests, compat, recipe, baseline,
                    experiment, caps, unchanged, rollback_verified)
+
+
+def scoped_recipe(recipe: dict, adapters: set[str]) -> dict:
+    """The recipe without the rules (and coordinated packages) of framework add-ons that are off."""
+    from .scope import rule_enabled
+    pk = dict(recipe["transformations"]["packages"])
+    pk["coordinated_framework_prefixes"] = [x for x in pk["coordinated_framework_prefixes"]
+                                            if not (x.startswith("Microsoft.AspNetCore") and "aspnet_core" not in adapters)
+                                            and not (x.startswith("Microsoft.EntityFrameworkCore") and "efcore" not in adapters)]
+    return {**recipe, "rules": [r for r in recipe["rules"] if rule_enabled(r, adapters)],
+            "transformations": {**recipe["transformations"], "packages": pk}}
 
 
 def _finish(repo: Path, out: Path, request: dict, preflight: dict, inventory: dict, grouping: dict, tests: dict,
@@ -305,6 +320,8 @@ def _finish(repo: Path, out: Path, request: dict, preflight: dict, inventory: di
                    for g in plan["groups"]][:limits.RESPONSE_ITEMS * 3],
         "groups_omitted": max(0, len(plan["groups"]) - limits.RESPONSE_ITEMS * 3),
         "package_catalog": dict(compat.get("package_catalog") or {}, spec=request.get("package_catalog")),
+        "adapters_enabled": inventory.get("adapters_enabled", []),
+        "out_of_scope_projects": inventory.get("out_of_scope_projects", [])[:limits.RESPONSE_ITEMS * 3],
         "changes_persisted": not unchanged,
         "rollback_verified": rollback_verified,
         "unresolved_items": ([b["detail"] for b in plan["blockers"]]
@@ -353,13 +370,18 @@ def rerender(repo: Path, out: Path, request: dict | None = None) -> dict:
     if not preflight or not inventory:
         raise SystemExit(f"{out} is not an analysis folder (preflight.json/inventory.json missing)")
     baseline, experiment = load("baseline.json"), load("experiment.json")
+    from . import scope as scope_mod
+    adapters = scope_mod.parse(request.get("adapters") if request.get("adapters") is not None
+                               else old.get("adapters_enabled", []))
+    inventory["adapters_enabled"] = sorted(adapters)
+    inventory["out_of_scope_projects"] = scope_mod.annotate(inventory, adapters)
     graph = ProjectGraph(inventory["projects"])
     tests = associate_tests(graph)
     grouping = build_groups(graph, tests)
     grouping["cycles"] = graph.cycles()
-    recipe = load_recipe(RECIPES)
+    recipe = scoped_recipe(load_recipe(RECIPES), set(inventory.get("adapters_enabled", [])))
     spec = request.get("package_catalog") or (old.get("package_catalog") or {}).get("spec")
-    nuget = load_catalog(spec, out / "nuget-cache", online=request.get("probe_network", True),
+    nuget = load_catalog(spec, out / "nuget-cache", allow_network=public_nuget_allowed(request),
                          runner=Runner(None, out / "logs" / "report"), repo=repo)
     request = dict(request, package_catalog=spec)
     compat = run_compatibility(repo, inventory, recipe, nuget, preflight["selected_sdk_in_repository"])

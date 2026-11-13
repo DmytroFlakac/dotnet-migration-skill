@@ -3,23 +3,49 @@
   "$id": "https://example.invalid/dotnet-migration-skill/request.schema.json",
   "title": "dotnet-migration-skill request",
   "type": "object",
-  "required": [
-    "repository_path",
-    "mode",
-    "target_framework"
-  ],
+  "required": [],
   "properties": {
-    "repository_path": {
+    "repository": {
       "type": "string"
     },
     "mode": {
       "enum": [
         "analysis",
-        "implementation"
+        "implementation",
+        "global",
+        "validate",
+        "validation",
+        "rollback"
       ]
+    },
+    "targetFramework": {
+      "const": "net10.0"
+    },
+    "group": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "maxRepairs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "outputDir": {
+      "type": "string"
+    },
+    "allowPublicNuget": {
+      "type": "boolean"
+    },
+    "repository_path": {
+      "type": "string"
     },
     "target_framework": {
       "const": "net10.0"
+    },
+    "allow_public_nuget": {
+      "type": "boolean"
     },
     "selected_group_id": {
       "type": [
@@ -55,7 +81,52 @@
     },
     "global_plan_id": {
       "type": "string"
+    },
+    "allow_network": {
+      "type": "boolean"
+    },
+    "package_catalog": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "adapters": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "aspnet_core",
+          "efcore",
+          "windows_service"
+        ]
+      }
+    },
+    "scope": {
+      "enum": [
+        "group",
+        "repository"
+      ]
+    },
+    "time_budget_minutes": {
+      "type": [
+        "number",
+        "null"
+      ]
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "anyOf": [
+    {
+      "required": [
+        "repository",
+        "mode"
+      ]
+    },
+    {
+      "required": [
+        "repository_path",
+        "mode"
+      ]
+    }
+  ]
 }

@@ -3,9 +3,10 @@ which are approved, and which target frameworks they support.
 
     PackageCatalog                 the interface (list_versions, is_available, is_approved,
                                    get_compatibility, get_dependencies, get_metadata)
-    PublicNuGetCatalog             the configured NuGet feeds, queried through `dotnet` (compat.NuGetClient):
-                                   every available version counts as approved
-    FixturePackageCatalog          a JSON file that emulates an enterprise mirror, with approved versions
+    LocalCatalog (default)         a local JSON file standing in for the package mirror, with approved
+                                   versions; no network. Without a file, package questions are "unknown".
+    PublicNuGetCatalog             the configured NuGet feeds, queried through `dotnet` (compat.NuGetClient);
+                                   only with --allow-public-nuget. Every available version counts as approved.
 
 The engine never invents or forces a version the configured catalogue does not expose:
 `newest_allowed()` chooses only among approved (or, without an approval list, available) versions.
@@ -76,19 +77,20 @@ class PackageCatalog:
         return max(allowed, key=ver_key) if allowed else None
 
     def describe(self) -> dict:
-        return {"kind": self.kind, "source": self.source}
+        return {"kind": self.kind, "source": self.source, "network": self.kind != "local"}
 
 
-class FixturePackageCatalog(PackageCatalog):
+class LocalCatalog(PackageCatalog):
     """A JSON file emulating an enterprise mirror:
     {"sources": [...], "packages": {"Id": {"availableVersions": [...], "approvedVersions": [...],
      "compatibility": {"1.0.0": ["net8.0", "net10.0"]}, "dependencies": {"1.0.0": {"net10.0": [{"id", "range"}]}},
      "metadata": {...}}}}. A package absent from the file is absent from the mirror."""
-    kind = "fixture"
+    kind = "local"
 
-    def __init__(self, path: Path):
-        self.source = str(path)
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    def __init__(self, path: Path | None):
+        self.configured = path is not None
+        self.source = str(path) if path else "none given (package versions are unknown, never guessed)"
+        data = json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
         self.sources = data.get("sources", [])
         self.packages = {k.lower(): v for k, v in data.get("packages", {}).items()}
         self.failures = []
@@ -97,10 +99,14 @@ class FixturePackageCatalog(PackageCatalog):
         return self.packages.get(package.lower())
 
     def list_versions(self, package: str) -> list[str] | None:
+        if not self.configured:
+            return None  # unknown: no catalogue was given
         p = self._p(package)
         return sorted(p.get("availableVersions", []), key=ver_key) if p else []
 
     def is_approved(self, package: str, version: str) -> bool | None:
+        if not self.configured:
+            return None
         p = self._p(package)
         if not p:
             return False
@@ -126,10 +132,25 @@ class FixturePackageCatalog(PackageCatalog):
                 "approved": self.is_approved(package, version), **(p.get("metadata") or {})}
 
 
-def load_catalog(spec: str | None, cache_dir: Path, online: bool = True, runner=None,
-                 repo: Path | None = None) -> PackageCatalog:
-    """spec: a fixture JSON path, or None/"public" for the configured NuGet feeds via dotnet."""
+FixturePackageCatalog = LocalCatalog  # earlier name
+
+
+def public_nuget_allowed(request: dict) -> bool:
+    """`allowPublicNuget` / `allow_public_nuget`; `allow_network` is the older name."""
+    return bool(request.get("allowPublicNuget") or request.get("allow_public_nuget") or request.get("allow_network"))
+
+
+def load_catalog(spec: str | None, cache_dir: Path, allow_network: bool = False, runner=None,
+                 repo: Path | None = None, online: bool | None = None) -> PackageCatalog:
+    """spec: a local catalogue JSON (the default kind), or "public" for the configured NuGet feeds via
+    dotnet (plus nuget.org metadata for nuget.org packages). The public catalogue is used only with
+    --allow-public-nuget (`allow_network` here); never as a fallback: without it, versions are unknown
+    (METADATA_UNAVAILABLE)."""
+    if online is not None:  # older keyword
+        allow_network = online
     if spec and spec != "public":
-        return FixturePackageCatalog(Path(spec))
-    from .compat import NuGetClient  # PublicNuGetCatalog
-    return NuGetClient(cache_dir, online=online, runner=runner, repo=repo)
+        return LocalCatalog(Path(spec))
+    if allow_network:
+        from .compat import NuGetClient  # PublicNuGetCatalog
+        return NuGetClient(cache_dir, online=True, runner=runner, repo=repo)
+    return LocalCatalog(None)

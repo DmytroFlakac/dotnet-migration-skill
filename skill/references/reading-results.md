@@ -17,7 +17,7 @@
 | `NEEDS_KNOWN_REPAIR` | Its own projects failed on net10.0, and every failure matches a recipe rule with a defined repair. | Name the rule and the repair; implementation mode can apply it. |
 | `WAITS_FOR_DEPENDENCY_REPAIR` | Its tests regressed only because of a problem in a group it depends on (usually shared-foundation). | Nothing to fix inside this group; it is unblocked when the dependency is repaired. |
 | `NEEDS_HUMAN_REVIEW` | A rule matched whose repair is a design decision (hosting model, serializer…). | List the decisions needed. |
-| `VALIDATION_REQUIRES_WINDOWS` | Windows-only projects could not be validated on this host. | Needs a Windows runner. |
+| `BLOCKED_PLATFORM` | Windows-only projects could not be validated on this host. | Needs a Windows runner. |
 | `BLOCKED_NEEDS_INVESTIGATION` | net10.0 errors or regressions that no rule explains. | Show the diagnostics; a person must investigate (and a new rule may be worth adding). |
 | `NOT_VERIFIED_NO_EXPERIMENT` / `NOT_VERIFIED_NO_BASELINE` | The experiment or baseline did not run or did not restore. | Nothing about this group is verified. |
 

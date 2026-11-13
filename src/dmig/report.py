@@ -11,13 +11,16 @@ import json
 from . import limits
 
 RAG = {"READY": "🟢", "WAITS_FOR_DEPENDENCY_REPAIR": "🟡", "NEEDS_KNOWN_REPAIR": "🟡", "NEEDS_HUMAN_REVIEW": "🟠",
-       "VALIDATION_REQUIRES_WINDOWS": "🟠", "BLOCKED_NEEDS_INVESTIGATION": "🔴",
-       "NOT_VERIFIED_NO_EXPERIMENT": "⚪", "NOT_VERIFIED_NO_BASELINE": "⚪"}
+       "BLOCKED_PLATFORM": "🟠", "BLOCKED_NEEDS_INVESTIGATION": "🔴",
+       "NOT_VERIFIED_NO_EXPERIMENT": "⚪", "NOT_VERIFIED_NO_BASELINE": "⚪",
+       "OUT_OF_SCOPE_ADAPTER_DISABLED": "⚫", "OUT_OF_SCOPE_REPORT_ONLY": "⚫"}
 PLAIN = {"READY": "ready", "WAITS_FOR_DEPENDENCY_REPAIR": "waits for a dependency's repair",
          "NEEDS_KNOWN_REPAIR": "needs a known (automatic) repair", "NEEDS_HUMAN_REVIEW": "needs a human decision",
-         "VALIDATION_REQUIRES_WINDOWS": "needs a Windows machine to validate",
+         "BLOCKED_PLATFORM": "needs a Windows machine to validate",
          "BLOCKED_NEEDS_INVESTIGATION": "blocked: failures no rule explains",
-         "NOT_VERIFIED_NO_EXPERIMENT": "not verified (no experiment)", "NOT_VERIFIED_NO_BASELINE": "not verified (no baseline)"}
+         "NOT_VERIFIED_NO_EXPERIMENT": "not verified (no experiment)", "NOT_VERIFIED_NO_BASELINE": "not verified (no baseline)",
+         "OUT_OF_SCOPE_ADAPTER_DISABLED": "out of scope: its framework add-on is off (--adapters)",
+         "OUT_OF_SCOPE_REPORT_ONLY": "out of scope: listed only (legacy/MAUI/Xamarin/Functions)"}
 
 
 def _name(pid: str) -> str:
@@ -133,7 +136,7 @@ def _reason(g: dict) -> str:
         r = ex["test_regressions"][0]
         return (f"{len(ex['test_regressions'])} test regression(s) → {', '.join(r['probable_cause'] or ['unknown'])}"
                 + (f" (fixed in {', '.join(r['inherited_from_groups'])})" if r.get("inherited_from_groups") else ""))
-    if g["readiness"] == "VALIDATION_REQUIRES_WINDOWS":
+    if g["readiness"] == "BLOCKED_PLATFORM":
         return "Windows-only projects"
     if not g["test_project_ids"]:
         return "no tests: build-only validation"

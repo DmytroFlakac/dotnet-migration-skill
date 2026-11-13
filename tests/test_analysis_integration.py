@@ -12,7 +12,7 @@ import pytest
 from dmig.analysis import run_analysis, validate_outputs
 from dmig.dotnet import Runner
 
-from conftest import ROOT, dotnet_path
+from conftest import CATALOG, FULL, ROOT, dotnet_path, requires
 
 GOLDEN = ROOT / "tests" / "golden" / "synthetic-analysis.json"
 
@@ -42,12 +42,12 @@ def summarize(out: Path) -> dict:
     }
 
 
-@pytest.mark.skipif(dotnet_path() is None, reason="dotnet not available")
+@requires(*FULL)
 def test_analysis_mode_acceptance(sample_repo: Path, tmp_path: Path, request):
     before = _status(sample_repo)
     out = tmp_path / "out"
     response = run_analysis(sample_repo, out, Runner(dotnet_path(), out / "logs"),
-                            {"run_baseline": True, "allow_reversible_experiments": True, "probe_network": True})
+                            {"run_baseline": True, "allow_reversible_experiments": True, "package_catalog": str(CATALOG)})
 
     # 10. schema-valid JSON and a human-readable report
     assert validate_outputs(out) == []

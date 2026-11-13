@@ -1,15 +1,70 @@
 # Changelog
 
 Versions follow semantic versioning. 1.0 is reserved for the end of the production checklist
-(full real-repository migration, Linux run, hardening, a organisation pilot).
+(full real-repository migration, Linux run, hardening, a real-world pilot).
 
 ## Unreleased
 
+### Hardening for locked-down Windows machines
+- **Console never crashes on cp1252:** plain ASCII on the console (PASS/WARN/FAIL/BLOCK), stdout and
+  stderr replace what they cannot show; files stay UTF-8.
+- **No HTTP client in the tool:** the nuget.org HTTP fallback (`compat.py`) and the urllib feed probe
+  (`preflight.py`) are gone; package traffic goes only through `dotnet` and the configured feeds.
+  `--allow-network` is now `--allow-public-nuget` (old name kept); without a catalogue, versions are
+  `METADATA_UNAVAILABLE`.
+- **Configured feeds are probed by default** (`--offline` skips it), each reported as OK,
+  AUTH_REQUIRED (401), FORBIDDEN (403), NOT_FOUND (404), DNS_FAILURE, TIMEOUT or FEED_UNREACHABLE;
+  one failing feed among working ones is a limitation, not a block.
+- **.NET 8 in another dotnet folder:** found in the usual places or via `--dotnet-root` /
+  `DMIG_DOTNET_ROOTS`, and combined with the active SDK through links (nothing installed or changed).
+- **Doctor:** .NET 8 runtime missing is a WARN (a capability), non-git folders get exact steps,
+  path-length risk, workloads, clean working tree, shared/global files, Windows-only projects;
+  `environment-capabilities.json` names the capabilities.
+- **git hooks off** for every git command (Git for Windows runs hooks through `sh`).
+- **Scope:** WPF and WinForms are report-only; `net*-windows` without Windows is `BLOCKED_PLATFORM`
+  (was `REQUIRES_WINDOWS`).
+- **Adapters renamed** to the fixed names (`IPackageCatalog`, `ISourceControl`, `IWorkItemAdapter`,
+  `ISecretProvider`, `ICiExecutor`, `ITelemetry`, `IDelivery`); the mock catalogue is
+  `fixtures/package-catalog.json`; earlier names remain as aliases.
+- **Result:** `PARTIAL`, `groups`, `changes`, `repairs`, `stopReason`, `missingCapabilities`,
+  `unvalidated`, `rollbackVerified`; every run writes `migration-report.md` (and `migration.patch`).
+  The camelCase request is accepted.
+- **A run that stops before any repair records why** (`repair_attempts` entry with
+  `stop_for_human_review`), instead of an empty list.
+- **ASP.NET Core packages pinned in a project** (e.g. `Microsoft.AspNetCore.Mvc.Testing`) move to 10.x
+  with the project (split by target framework while it keeps net8.0). Found on a real repository.
+- **Sample:** `NuGet.config` no longer hard-codes nuget.org; default outputs for repositories inside
+  the tool folder go to the temp folder.
+- **Tests:** capability-based skips naming what is missing; feed tests only with
+  `DMIG_TEST_NETWORK=1` or a local `DMIG_NUGET_SOURCE`; `samples/` guarded against changes;
+  strict compile test (warnings as errors); `requirements-dev.txt` with pinned pytest.
+
+### Changed (behaviour)
+- **No network by default.** The tool makes no network call of its own unless `--allow-network`;
+  the default package catalogue is a local JSON file (`LocalCatalog`), the public one is used only
+  with `--allow-network` and never as a fallback; a package or version missing from the catalogue
+  is `PACKAGE_UNAVAILABLE`. Preflight lists feeds without contacting them. The whole test suite
+  runs with Python sockets refused.
+- **Framework add-ons off by default.** Default scope: class libraries, console apps, worker
+  services, test projects. `--adapters aspnet_core,efcore,wpf,winforms,windows_service` enables the
+  others; projects of a disabled type are listed as `OUT_OF_SCOPE_ADAPTER_DISABLED` (legacy, MAUI,
+  Xamarin, Azure Functions: `OUT_OF_SCOPE_REPORT_ONLY`) and never migrated.
+- Doctor labels each check PASS / WARN / BLOCK; a missing .NET 8 runtime is BLOCK; Windows
+  availability reported; disk estimated from the repository size. Validation of a Windows-only
+  group on another OS is `REQUIRES_WINDOWS`.
+- Projects still used by .NET 8-only projects outside their group keep `net8.0` next to `net10.0`.
+
 ### Added
+- `src/dmig/adapters/`: PackageCatalog, SourceControl, WorkItems, Secrets, Telemetry, Runner, each
+  with a mock and a test; telemetry written through the adapter (`telemetry.jsonl`).
+- `docs/integration-contract.md` (inputs, outputs, statuses, exit codes, responsibilities,
+  acceptance tests); `THIRD_PARTY_NOTICES.md`; transitive dependencies in `requirements.lock`.
+- Human to-do list (`human-todo.md/.json`, Obsidian note "06 Human to-do").
+- Tests: every `.py` compiles; offline guard; scope; adapters.
 - **Package catalogue interface**: `PackageCatalog` with `list_versions`,
   `is_available`, `is_approved`, `get_compatibility`, `get_dependencies`, `get_metadata`;
   `PublicNuGetCatalog` (configured feeds via `dotnet`) and `FixturePackageCatalog` (JSON mirror with
-  approved versions, `samples/package-catalog.fixture.json`). Analysis strategies, PHASE_6, the
+  approved versions, `fixtures/package-catalog.json`). Analysis strategies, PHASE_6, the
   PHASE_1 MSBuild SDK pin repair and the NU1605 group repair choose only approved versions.
   New findings `PKG-NOT-IN-CATALOGUE` and `PKG-VERSION-NOT-APPROVED`. `--package-catalog` /
   `DMIG_PACKAGE_CATALOG`; implementation and global phases reuse the analysis's choice.
