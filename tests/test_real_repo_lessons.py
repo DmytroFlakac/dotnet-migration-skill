@@ -305,3 +305,26 @@ def test_phase5_removes_both_spellings_of_net8_only_references(tmp_path):
     assert _drop_net8_conditions(tmp_path, "Core.csproj")
     text = p.read_text(encoding="utf-8")
     assert "net8.0" not in text and 'Include="C"' in text
+
+
+def test_container_images_move_to_tags_that_exist_for_net10(tmp_path):
+    """Real repository: 8.0-alpine3.21 and 8.0-bookworm-slim became 10.0-alpine3.21 and 10.0-bookworm-slim,
+    tags Microsoft does not publish (no Debian, Alpine 3.22+ only for .NET 10). The maintainers used
+    alpine3.23 and noble."""
+    from dmig.implement import update_docker_image
+    d = tmp_path / "Dockerfile"
+    d.write_text("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine3.21 AS build\n"
+                 "FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS rust\n"
+                 "FROM mcr.microsoft.com/dotnet/aspnet:8.0\n", encoding="utf-8")
+    notes = []
+    assert update_docker_image(tmp_path, "Dockerfile", notes) == ["Dockerfile"]
+    text = d.read_text(encoding="utf-8")
+    assert "sdk:10.0-alpine3.23 AS build" in text and "sdk:10.0-noble AS rust" in text and "aspnet:10.0\n" in text
+    assert notes and "Ubuntu" in notes[0]
+
+
+def test_a_project_that_already_builds_for_both_gets_net10_once():
+    """Real repository: a later group turned net8.0;net10.0 into net10.0;net10.0."""
+    cur = ["net8.0", "net10.0"]
+    new = list(dict.fromkeys(t.replace("net8.0", "net10.0", 1) if t.startswith("net8.0") else t for t in cur))
+    assert new == ["net10.0"]

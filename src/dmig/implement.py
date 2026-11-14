@@ -202,10 +202,40 @@ def repair_remove_package(worktree: Path, project_rel: str, package: str) -> lis
     return [project_rel]
 
 
-def update_docker_image(worktree: Path, rel: str) -> list[str]:
+# .NET 10 container images: Microsoft publishes no Debian images (bookworm, trixie) and only Alpine 3.22+
+# (checked on mcr.microsoft.com, 2026-11). An 8.0 tag on an older OS therefore needs a new OS suffix too,
+# or the build pulls a tag that does not exist (seen on a real repository: 10.0-alpine3.21, 10.0-bookworm-slim).
+DOTNET10_ALPINE = "alpine3.23"
+DOTNET10_DEBIAN_REPLACEMENT = "noble"  # Ubuntu 24.04, Microsoft's default for .NET 10
+DOCKER_TAG = re.compile(r"(mcr\.microsoft\.com/dotnet/(?:aspnet|runtime|runtime-deps|sdk)):8\.0(-[\w.\-]+)?")
+
+
+def dotnet10_tag_suffix(suffix: str | None) -> tuple[str, str | None]:
+    """The .NET 10 tag suffix for an 8.0 suffix, and a note when the operating system changes."""
+    if not suffix:
+        return "", None
+    s = suffix[1:]
+    m = re.match(r"alpine(\d+)\.(\d+)(.*)$", s)
+    if m and (int(m.group(1)), int(m.group(2))) < (3, 22):
+        return f"-{DOTNET10_ALPINE}{m.group(3)}", None
+    m = re.match(r"(bookworm|bullseye|trixie)(-slim)?(.*)$", s)
+    if m:
+        return (f"-{DOTNET10_DEBIAN_REPLACEMENT}{m.group(3)}",
+                f"Debian ({m.group(1)}) → Ubuntu ({DOTNET10_DEBIAN_REPLACEMENT}): .NET 10 has no Debian images; "
+                "check apt package names and users in this Dockerfile")
+    return suffix, None
+
+
+def update_docker_image(worktree: Path, rel: str, notes: list[str] | None = None) -> list[str]:
     path = worktree / rel
     text = path.read_text(encoding="utf-8")
-    new = re.sub(r"(mcr\.microsoft\.com/dotnet/(?:aspnet|runtime|runtime-deps|sdk)):8\.0", r"\1:10.0", text)
+
+    def repl(m: re.Match) -> str:
+        suffix, note = dotnet10_tag_suffix(m.group(2))
+        if note and notes is not None:
+            notes.append(f"{rel}: {note}")
+        return f"{m.group(1)}:10.0{suffix}"
+    new = DOCKER_TAG.sub(repl, text)
     if new != text:
         edits.write_like(path, new, edits.read(path))
         return [rel]
@@ -371,7 +401,9 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
                 multi_targeted.append(pid)
                 new = list(dict.fromkeys(t for x in cur for t in (x, x.replace("net8.0", "net10.0", 1) if x.startswith("net8.0") else x)))
             else:
-                new = [t.replace("net8.0", "net10.0", 1) if t.startswith("net8.0") else t for t in cur]
+                # dict.fromkeys: a project that already builds for both (from an earlier group) must not end up
+                # with "net10.0;net10.0" (seen on a real repository).
+                new = list(dict.fromkeys(t.replace("net8.0", "net10.0", 1) if t.startswith("net8.0") else t for t in cur))
             change = set_target_frameworks(worktree / pid, new)
             result["transformations"].append({"kind": "target_framework", "file": pid, "change_class": "PROJECT_LOCAL", **change,
                                               **({"kept_net8_for": net8_consumers[pid]} if pid in net8_consumers else {})})
@@ -404,7 +436,7 @@ def run_implementation(repo: Path, out: Path, runner: Runner, plan: dict, reques
         dirs = _project_dirs(group["project_ids"])
         for rel in inventory["files"]["dockerfiles"]:
             if any(rel.startswith(d) for d in dirs) and not is_shared:
-                for f in update_docker_image(worktree, rel):
+                for f in update_docker_image(worktree, rel, result.setdefault("manual_follow_ups", [])):
                     result["transformations"].append({"kind": "post_action:update-container-base-images", "file": f,
                                                       "change_class": "PROJECT_LOCAL", "before": "8.0", "after": "10.0"})
         for rel in inventory["ci_entrypoints"]:  # look at the file as it is now, not at the plan

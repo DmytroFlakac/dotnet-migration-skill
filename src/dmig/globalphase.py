@@ -30,7 +30,8 @@ from .dotnet import Runner
 from .secrets import added_lines, find_secrets
 from .experiment import settle_regressions, compare_tests, new_diagnostics, snapshot
 from .graph import ProjectGraph
-from .implement import PROP_TF, PROP_TFS, _bt_summary, _changed_files, _validate_result, set_target_frameworks
+from .implement import (PROP_TF, PROP_TFS, _bt_summary, _changed_files, _validate_result, set_target_frameworks,
+                        update_docker_image)
 
 PHASES = ["PHASE_1_SDK_GLOBAL", "PHASE_5_RETIRE_NET8", "PHASE_6_CONVERGE", "PHASE_7_REPO_VALIDATION", "PHASE_8_CUTOVER"]
 MARKER = "dmig PHASE_1: temporary .NET 8 runtime for net8.0 targets (removed by PHASE_8_CUTOVER)"
@@ -296,7 +297,38 @@ def phase8_edits(wt: Path, inventory: dict) -> tuple[list[dict], list[str]]:
             edits.write_like(path, new, edits.read(path))
             changes.append({"file": rel, "kind": "ci_remove_runtime8"})
     changes += fold_central_tfm(wt, inventory)
-    return changes, []
+    # Container images outside any group's folders (e.g. a Dockerfile that builds several projects) are
+    # still on 8.0 at this point: move them now, with the .NET 10 OS tags (seen on a real repository).
+    notes: list[str] = []
+    for rel in (inventory.get("files") or {}).get("dockerfiles", []):
+        if update_docker_image(wt, rel, notes):
+            changes.append({"file": rel, "kind": "container_images_to_10"})
+    # Scripts and docs that still name net8.0 build output (e.g. bin/Debug/net8.0/App.dll) are not
+    # changed automatically, but listed: they break once net8.0 is gone.
+    notes += [f"{rel} still mentions net8.0 (line {n}): check it" for rel, n in _net8_mentions(wt)]
+    return changes, notes
+
+
+SCRIPT_EXT = (".ps1", ".sh", ".cmd", ".bat", ".yml", ".yaml", ".json", ".md", ".py")
+
+
+def _net8_mentions(wt: Path, limit: int = 40) -> list[tuple[str, int]]:
+    hits = []
+    for path in sorted(wt.rglob("*")):
+        rel = path.relative_to(wt).as_posix()
+        if (not path.is_file() or path.suffix.lower() not in SCRIPT_EXT
+                or any(part in {".git", "bin", "obj", "node_modules"} for part in path.relative_to(wt).parts)):
+            continue
+        try:
+            for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if "net8.0" in line:
+                    hits.append((rel, n))
+                    break
+        except OSError:
+            continue
+        if len(hits) >= limit:
+            break
+    return hits
 
 
 CENTRAL_TF = re.compile(r"(<TargetFramework>)net8\.0(</TargetFramework>)")
@@ -423,7 +455,8 @@ def run_global_phase(repo: Path, out: Path, runner: Runner, plan: dict, phase: s
         result["manual_follow_ups"] = notes
         if not changes:
             result["unresolved_items"] += notes or ["nothing to change in this phase"]
-            blocked = phase in {"PHASE_5_RETIRE_NET8", "PHASE_8_CUTOVER"} and notes
+            blocked = (phase == "PHASE_5_RETIRE_NET8" and bool(notes)) or (
+                phase == "PHASE_8_CUTOVER" and any(n.startswith("net8.0 still targeted") for n in notes))
             return finish("BLOCKED_NOT_READY" if blocked else "NOTHING_TO_DO")
 
         _progress(f"{phase}: {len(changes)} change(s) applied; full build/test")
