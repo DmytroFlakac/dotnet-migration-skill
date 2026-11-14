@@ -176,28 +176,44 @@ def _github_add_sdk10(text: str, keep8: bool) -> str:
 
 # ------------------------------------------------------------------------------- PHASE_5
 def phase5_edits(wt: Path, inventory: dict, plan: dict) -> tuple[list[dict], list[str]]:
+    """Every project that builds for both net8.0 and net10.0 drops net8.0 together, unless something
+    still needs its net8.0 build: a consumer that is net8.0-only (not migrated yet), or, transitively,
+    another dual-target project that has to keep net8.0 for that reason. Judging each project only by
+    "is any consumer still on net8.0?" made dual-target consumers block each other, so a real
+    repository needed one run per layer (seen on Bitwarden: 3 of 18 projects per run)."""
     graph = ProjectGraph(inventory["projects"])
     projects = {p["id"]: p for p in inventory["projects"]}
+    has8 = lambda pid: any(t.startswith("net8.0") for t in projects[pid]["target_frameworks"])  # noqa: E731
+    has10 = lambda pid: any(t.startswith("net10.0") for t in projects[pid]["target_frameworks"])  # noqa: E731
+    dual = {pid for pid in projects if has8(pid) and has10(pid)}
+    net8_only = {pid for pid in projects if has8(pid) and not has10(pid)}
     changes, notes = [], []
-    for s in plan["shared_projects"]:
-        pid = s["project_id"]
-        if pid not in projects:
-            notes.append(f"{pid}: no longer exists")
-            continue
-        own_tests = list(s["validation_matrix"][0]["tests"]) if s.get("validation_matrix") else []
-        # Every consumer counts, including other groups' test projects that reference it directly.
-        consumers = [c for c in graph.all_consumers(pid) if c not in own_tests]
-        still8 = [c for c in consumers if any(t.startswith("net8.0") for t in projects[c]["target_frameworks"])]
-        if still8:
-            notes.append(f"{s['name']} keeps net8.0: still used by {', '.join(projects[c]['name'] for c in still8)}")
-            continue
-        for target in [pid] + [t for t in own_tests if t in projects]:
-            tfms = projects[target]["target_frameworks"]
-            new = [t for t in tfms if not t.startswith("net8.0")]
-            if new and new != tfms:
-                change = set_target_frameworks(wt / target, new)
-                changes.append({"file": target, "kind": "retire_net8", **change})
-                changes += _drop_net8_conditions(wt, target)
+    keep: dict[str, list[str]] = {}  # dual project -> net8.0-only consumers (direct or through kept duals)
+    for pid in sorted(dual):
+        blockers = [c for c in graph.all_consumers(pid) if c in net8_only]
+        if blockers:
+            keep[pid] = blockers
+    grew = True
+    while grew:  # a dual project used by a kept dual project must keep net8.0 too
+        grew = False
+        for pid in sorted(dual - set(keep)):
+            via = [c for c in graph.all_consumers(pid) if c in keep]
+            if via:
+                keep[pid] = sorted({b for c in via for b in keep[c]})
+                grew = True
+    for pid, blockers in sorted(keep.items()):
+        notes.append(f"{projects[pid]['name']} keeps net8.0: still needed by .NET 8-only "
+                     f"{', '.join(projects[c]['name'] for c in blockers[:8])}")
+    shared_names = {s["project_id"] for s in plan.get("shared_projects", [])}
+    missing = [s for s in shared_names if s not in projects]
+    notes += [f"{pid}: no longer exists" for pid in missing]
+    for target in sorted(dual - set(keep)):
+        tfms = projects[target]["target_frameworks"]
+        new = [t for t in tfms if not t.startswith("net8.0")]
+        if new and new != tfms:
+            change = set_target_frameworks(wt / target, new)
+            changes.append({"file": target, "kind": "retire_net8", **change})
+            changes += _drop_net8_conditions(wt, target)
     return changes, notes
 
 
@@ -205,8 +221,10 @@ def _drop_net8_conditions(wt: Path, rel: str) -> list[dict]:
     """Package references kept only for net8.0 have no purpose once net8.0 is gone."""
     path = wt / rel
     text = path.read_text(encoding="utf-8")
-    new = re.sub(r"[ \t]*<PackageReference[^>]*Condition=\"\$\(TargetFramework\.StartsWith\('net8\.0'\)\)\"[^>]*/>\r?\n?",
-                 "", text)
+    # Both spellings the tool writes: StartsWith('net8.0') (NU1510 repair) and == 'net8.0' (runtime-matched
+    # packages split by target framework).
+    new = re.sub(r"[ \t]*<PackageReference[^>]*Condition=\"(?:\$\(TargetFramework\.StartsWith\('net8\.0'\)\)"
+                 r"|\s*'\$\(TargetFramework\)'\s*==\s*'net8\.0'\s*)\"[^>]*/>\r?\n?", "", text)
     new = re.sub(r"[ \t]*<ItemGroup>\s*</ItemGroup>[ \t]*\r?\n?", "", new)
     if new != text:
         edits.write_like(path, new, edits.read(path))
@@ -368,16 +386,27 @@ def run_global_phase(repo: Path, out: Path, runner: Runner, plan: dict, phase: s
         if phase == "PHASE_7_REPO_VALIDATION":
             ref = request.get("reference_baseline")  # the analysis baseline (original net8.0 repository)
             remaining = _net8_projects(inventory)
-            tests = compare_tests(ref, base) if ref else None
+            # Same rule as every other step: a failing test is re-run once; one that then passes is flaky,
+            # one that fails twice with a timeout/deadlock/lost connection is environment-unstable (reported,
+            # not validated). Without it, a slow test database failed the whole repository check (seen on a
+            # real repository: 5 SQL "Execution Timeout Expired" failures, all passing in their group runs).
+            tests = settle_regressions(compare_tests(ref, base), wt, out, "repo-validation", runner) if ref else None
             diag = new_diagnostics(ref, base) if ref else None
             ok = base["build_succeeded"] and base["restore_succeeded"] and (tests is None or not tests["regressions"])
             result["validation"] = {
                 "compared_with": "analysis baseline (original repository)" if ref else "nothing (no analysis baseline)",
                 "regressions": tests["regressions"] if tests else None,
+                "flaky": tests.get("flaky", []) if tests else None,
+                "environment_unstable": tests.get("environment_unstable", []) if tests else None,
                 "baseline_failures_still_failing": tests["baseline_failures_still_failing"] if tests else None,
                 "new_errors": diag["new_errors"] if diag else None,
                 "projects_still_on_net8": remaining}
             result["unresolved_items"] += [f"still targets net8.0: {p}" for p in remaining]
+            if tests and tests.get("environment_unstable"):
+                result["unresolved_items"].append(
+                    f"{len(tests['environment_unstable'])} test(s) NOT VALIDATED: failed twice with a timeout, deadlock or "
+                    "lost connection (test environment unstable), not counted as passed: "
+                    + ", ".join(r["test"] for r in tests["environment_unstable"][:10]))
             return finish("VALIDATION_PASSED" if ok else "VALIDATION_FAILED")
 
         if phase == "PHASE_1_SDK_GLOBAL":

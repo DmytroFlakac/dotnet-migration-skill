@@ -262,3 +262,46 @@ def test_msbuild_really_multi_targets_after_the_edit(tmp_path):
                 cwd=tmp_path, capture_output=True, text=True, timeout=300)
     props = _json.loads(r.stdout[r.stdout.find("{"):])["Properties"]
     assert props["TargetFramework"] == "" and props["TargetFrameworks"] == "net8.0;net10.0"
+
+
+def test_phase5_retires_net8_from_all_dual_projects_at_once(tmp_path):
+    """Real repository: dual-target libraries used only by other dual-target projects blocked each other,
+    so PHASE_5 dropped net8.0 from 3 of 18 projects per run. Now they drop together, unless something
+    .NET 8-only still needs them (directly or through another kept project)."""
+    from dmig.globalphase import phase5_edits
+
+    def proj(pid, tfms, refs=()):
+        (tmp_path / pid).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / pid).write_text('<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n'
+                                    "    <TargetFramework></TargetFramework>\n"
+                                    f"    <TargetFrameworks>{';'.join(tfms)}</TargetFrameworks>\n"
+                                    "  </PropertyGroup>\n</Project>\n", encoding="utf-8")
+        return {"id": pid, "name": pid.split("/")[0], "kind": "library", "target_frameworks": list(tfms),
+                "project_references": list(refs)}
+    both = ["net8.0", "net10.0"]
+    inv = {"projects": [proj("Core/Core.csproj", both), proj("Data/Data.csproj", both, ["Core/Core.csproj"]),
+                        proj("Web/Web.csproj", ["net10.0"], ["Data/Data.csproj"])]}
+    changes, notes = phase5_edits(tmp_path, inv, {"shared_projects": []})
+    assert sorted(c["file"] for c in changes if c["kind"] == "retire_net8") == ["Core/Core.csproj", "Data/Data.csproj"]
+    assert notes == []
+    # A .NET 8-only consumer of Data keeps Data, and through it Core, on net8.0.
+    inv["projects"].append(proj("Old/Old.csproj", ["net8.0"], ["Data/Data.csproj"]))
+    for p in inv["projects"][:2]:
+        proj(p["id"], both, p["project_references"])
+    changes, notes = phase5_edits(tmp_path, inv, {"shared_projects": []})
+    assert [c for c in changes if c["kind"] == "retire_net8"] == []
+    assert len(notes) == 2 and all("Old" in n for n in notes)
+
+
+def test_phase5_removes_both_spellings_of_net8_only_references(tmp_path):
+    """After PHASE_5, references kept only for net8.0 are dead lines; both forms the tool writes are removed."""
+    from dmig.globalphase import _drop_net8_conditions
+    p = tmp_path / "Core.csproj"
+    p.write_text('<Project>\n  <ItemGroup>\n'
+                 '    <PackageReference Include="A" Version="8.0.10" Condition="\'$(TargetFramework)\' == \'net8.0\'" />\n'
+                 '    <PackageReference Include="B" Condition="$(TargetFramework.StartsWith(\'net8.0\'))" NoWarn="NU1510" />\n'
+                 '    <PackageReference Include="C" Version="10.0.2" />\n'
+                 '  </ItemGroup>\n</Project>\n', encoding="utf-8")
+    assert _drop_net8_conditions(tmp_path, "Core.csproj")
+    text = p.read_text(encoding="utf-8")
+    assert "net8.0" not in text and 'Include="C"' in text
